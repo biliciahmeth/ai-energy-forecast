@@ -72,30 +72,37 @@ function App() {
             <span className="logo-icon">⚡</span>
             <h1>AI Energy Forecast</h1>
           </div>
-          <p className="header-sub">GraphCast & FourCastNet ile Rüzgar ve Güneş Enerji Tahmini</p>
+          <span className="header-sub">NOAA MLWP · GraphCast · FourCastNet</span>
         </div>
       </header>
 
-      {/* HERO / ABOUT */}
+      {/* HERO */}
       <section className="hero">
-        <div className="hero-cards">
-          <div className="hero-card">
-            <span className="hero-card-icon">🌍</span>
-            <h3>Ne Yapar?</h3>
-            <p>Dünya genelinde herhangi bir noktanın rüzgar hızı, sıcaklık ve atmosfer basıncı tahminini AI modelleriyle sunar.</p>
-          </div>
-          <div className="hero-card">
-            <span className="hero-card-icon">🤖</span>
-            <h3>Hangi Modeller?</h3>
-            <p>Google DeepMind'ın <strong>GraphCast</strong> ve NVIDIA'nın <strong>FourCastNet</strong> modelleri — NOAA MLWP açık verisiyle beslenir.</p>
-          </div>
-          <div className="hero-card">
-            <span className="hero-card-icon">🗺️</span>
-            <h3>Nasıl Kullanılır?</h3>
-            <p>Model ve bölge seçin, haritadan istediğiniz noktaya tıklayın — tahmin grafikleri anında yüklensin.</p>
-          </div>
+        <div className="hero-text">
+          <h2>Rüzgar ve Güneş Enerjisi<br /><span>AI ile Tahmin</span></h2>
+          <p>Dünyanın herhangi bir noktası için NOAA açık meteoroloji verisi ve yapay zeka modelleriyle rüzgar hızı, sıcaklık ve atmosfer basıncı tahminleri.</p>
         </div>
       </section>
+
+      {/* STATS BAR */}
+      <div className="stats-bar">
+        <div className="stat-item">
+          <span className="stat-value">2</span>
+          <span className="stat-label">AI Model</span>
+        </div>
+        <div className="stat-item">
+          <span className="stat-value">4</span>
+          <span className="stat-label">Bölge</span>
+        </div>
+        <div className="stat-item">
+          <span className="stat-value">24s</span>
+          <span className="stat-label">Güncelleme</span>
+        </div>
+        <div className="stat-item">
+          <span className="stat-value">NOAA</span>
+          <span className="stat-label">Açık Veri</span>
+        </div>
+      </div>
 
       {/* CONTROLS */}
       <div className="controls">
@@ -155,12 +162,12 @@ function App() {
               <h3>💨 Rüzgar Hızı (m/s)</h3>
               <ResponsiveContainer width="100%" height={250}>
                 <LineChart data={forecastData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#2a2a3a" />
-                  <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9e9e9e' }} />
-                  <YAxis tick={{ fontSize: 11, fill: '#9e9e9e' }} />
-                  <Tooltip contentStyle={{ background: '#1e1e2e', border: '1px solid #3a3a4a', borderRadius: '8px' }} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                  <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                  <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
                   <Legend />
-                  <Line type="monotone" dataKey="windSpeed" stroke="#2196F3" name="Rüzgar Hızı" dot={false} strokeWidth={2} />
+                  <Line type="monotone" dataKey="windSpeed" stroke="#f97316" name="Rüzgar Hızı" dot={false} strokeWidth={2} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -169,12 +176,12 @@ function App() {
               <h3>🌡️ Sıcaklık (°C)</h3>
               <ResponsiveContainer width="100%" height={250}>
                 <LineChart data={forecastData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#2a2a3a" />
-                  <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9e9e9e' }} />
-                  <YAxis tick={{ fontSize: 11, fill: '#9e9e9e' }} />
-                  <Tooltip contentStyle={{ background: '#1e1e2e', border: '1px solid #3a3a4a', borderRadius: '8px' }} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                  <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                  <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
                   <Legend />
-                  <Line type="monotone" dataKey="t2" stroke="#F44336" name="Sıcaklık (°C)" dot={false} strokeWidth={2} />
+                  <Line type="monotone" dataKey="t2" stroke="#ef4444" name="Sıcaklık (°C)" dot={false} strokeWidth={2} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -183,12 +190,12 @@ function App() {
               <h3>🔵 Deniz Seviyesi Basıncı (hPa)</h3>
               <ResponsiveContainer width="100%" height={250}>
                 <LineChart data={forecastData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#2a2a3a" />
-                  <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9e9e9e' }} />
-                  <YAxis domain={[950, 1050]} tick={{ fontSize: 11, fill: '#9e9e9e' }} />
-                  <Tooltip contentStyle={{ background: '#1e1e2e', border: '1px solid #3a3a4a', borderRadius: '8px' }} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                  <YAxis domain={[950, 1050]} tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                  <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
                   <Legend />
-                  <Line type="monotone" dataKey="msl" stroke="#4CAF50" name="Basınç (hPa)" dot={false} strokeWidth={2} />
+                  <Line type="monotone" dataKey="msl" stroke="#3b82f6" name="Basınç (hPa)" dot={false} strokeWidth={2} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -203,9 +210,7 @@ function App() {
             Made by <strong>Ahmet Haşim Bilici</strong>
           </p>
           <div className="footer-links">
-            <a href="https://github.com/biliciahmeth/ai-energy-forecast" target="_blank" rel="noreferrer">
-              GitHub
-            </a>
+            <a href="https://github.com/biliciahmeth/ai-energy-forecast" target="_blank" rel="noreferrer">GitHub</a>
             <span className="footer-dot">·</span>
             <span>NOAA MLWP Open Data</span>
             <span className="footer-dot">·</span>
