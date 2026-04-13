@@ -310,3 +310,32 @@ body {
     gap: 4px;
   }
 }
+
+/* ── TOGGLE ── */
+.toggle-group {
+  display: flex;
+  align-items: center;
+  margin-top: 18px;
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: #6b7280;
+  user-select: none;
+}
+
+.toggle-label input[type="checkbox"] {
+  accent-color: #3b82f6;
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.toggle-label span {
+  color: #3b82f6;
+  font-weight: 500;
+}

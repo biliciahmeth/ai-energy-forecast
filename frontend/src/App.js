@@ -22,7 +22,9 @@ function App() {
   const [model, setModel] = useState('GRAP');
   const [region, setRegion] = useState('turkey');
   const [forecastData, setForecastData] = useState([]);
+  const [meteoData, setMeteoData] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [showMeteo, setShowMeteo] = useState(true);
 
   const handleLocationSelect = (lat, lon) => {
     setSelectedLat(lat.toFixed(2));
@@ -33,18 +35,31 @@ function App() {
     if (!selectedLat || !selectedLon) return;
     setLoading(true);
     try {
-      const res = await axios.get(`${API}/forecast`, {
-        params: { model, region, lat: selectedLat, lon: selectedLon }
-      });
-      const data = res.data.data.map(d => ({
+      const [aiRes, meteoRes] = await Promise.all([
+        axios.get(`${API}/forecast`, {
+          params: { model, region, lat: selectedLat, lon: selectedLon }
+        }),
+        axios.get(`${API}/openmeteo`, {
+          params: { lat: selectedLat, lon: selectedLon }
+        })
+      ]);
+
+      const aiData = aiRes.data.data.map(d => ({
         time: new Date(d.timestamp).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit' }),
-        u10: d.u10?.toFixed(2),
-        v10: d.v10?.toFixed(2),
+        windSpeed: Math.sqrt(d.u10 ** 2 + d.v10 ** 2).toFixed(2),
         t2: (d.t2 - 273.15)?.toFixed(1),
         msl: (d.msl / 100)?.toFixed(1),
-        windSpeed: Math.sqrt(d.u10 ** 2 + d.v10 ** 2).toFixed(2),
       }));
-      setForecastData(data);
+
+      const meteo = meteoRes.data.data.map(d => ({
+        time: new Date(d.timestamp).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit' }),
+        windSpeedMeteo: d.windSpeed?.toFixed(2),
+        t2Meteo: d.t2?.toFixed(1),
+        mslMeteo: d.msl?.toFixed(1),
+      }));
+
+      setForecastData(aiData);
+      setMeteoData(meteo);
     } catch (err) {
       console.error(err);
     }
@@ -54,6 +69,12 @@ function App() {
   useEffect(() => {
     if (selectedLat && selectedLon) fetchForecast();
   }, [selectedLat, selectedLon, model, region]);
+
+  // AI ve meteo verisini timestamp'e göre birleştir
+  const mergedData = forecastData.map(d => {
+    const match = meteoData.find(m => m.time === d.time);
+    return { ...d, ...(match || {}) };
+  });
 
   const regionCenters = {
     turkey: [39, 35],
@@ -127,6 +148,18 @@ function App() {
             📍 {selectedLat}°N, {selectedLon}°E
           </div>
         )}
+        {forecastData.length > 0 && (
+          <div className="toggle-group">
+            <label className="toggle-label">
+              <input
+                type="checkbox"
+                checked={showMeteo}
+                onChange={e => setShowMeteo(e.target.checked)}
+              />
+              <span>Meteoroloji tahmini</span>
+            </label>
+          </div>
+        )}
       </div>
 
       {/* MAP */}
@@ -154,20 +187,21 @@ function App() {
         )}
 
         {/* CHARTS */}
-        {forecastData.length > 0 && (
+        {mergedData.length > 0 && (
           <div className="charts">
             <h2>📊 {model === 'GRAP' ? 'GraphCast' : 'FourCastNet'} Tahmini</h2>
 
             <div className="chart-box">
               <h3>💨 Rüzgar Hızı (m/s)</h3>
               <ResponsiveContainer width="100%" height={250}>
-                <LineChart data={forecastData}>
+                <LineChart data={mergedData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
                   <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
                   <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} />
                   <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
                   <Legend />
-                  <Line type="monotone" dataKey="windSpeed" stroke="#f97316" name="Rüzgar Hızı" dot={false} strokeWidth={2} />
+                  <Line type="monotone" dataKey="windSpeed" stroke="#f97316" name="AI Tahmini" dot={false} strokeWidth={2} />
+                  {showMeteo && <Line type="monotone" dataKey="windSpeedMeteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray="5 3" />}
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -175,13 +209,14 @@ function App() {
             <div className="chart-box">
               <h3>🌡️ Sıcaklık (°C)</h3>
               <ResponsiveContainer width="100%" height={250}>
-                <LineChart data={forecastData}>
+                <LineChart data={mergedData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
                   <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
                   <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} />
                   <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
                   <Legend />
-                  <Line type="monotone" dataKey="t2" stroke="#ef4444" name="Sıcaklık (°C)" dot={false} strokeWidth={2} />
+                  <Line type="monotone" dataKey="t2" stroke="#f97316" name="AI Tahmini" dot={false} strokeWidth={2} />
+                  {showMeteo && <Line type="monotone" dataKey="t2Meteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray="5 3" />}
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -189,13 +224,14 @@ function App() {
             <div className="chart-box">
               <h3>🔵 Deniz Seviyesi Basıncı (hPa)</h3>
               <ResponsiveContainer width="100%" height={250}>
-                <LineChart data={forecastData}>
+                <LineChart data={mergedData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
                   <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
                   <YAxis domain={[950, 1050]} tick={{ fontSize: 11, fill: '#9ca3af' }} />
                   <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
                   <Legend />
-                  <Line type="monotone" dataKey="msl" stroke="#3b82f6" name="Basınç (hPa)" dot={false} strokeWidth={2} />
+                  <Line type="monotone" dataKey="msl" stroke="#f97316" name="AI Tahmini" dot={false} strokeWidth={2} />
+                  {showMeteo && <Line type="monotone" dataKey="mslMeteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray="5 3" />}
                 </LineChart>
               </ResponsiveContainer>
             </div>
