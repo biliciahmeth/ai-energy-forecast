@@ -43,7 +43,7 @@ function App() {
           params: {
             latitude: selectedLat,
             longitude: selectedLon,
-            hourly: 'temperature_2m,windspeed_10m,surface_pressure',
+            hourly: 'temperature_2m,windspeed_10m,pressure_msl',
             forecast_days: 10,
             timezone: 'auto',
             windspeed_unit: 'ms',
@@ -53,18 +53,24 @@ function App() {
 
       const aiData = aiRes.data.data.map(d => ({
         time: new Date(d.timestamp).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit' }),
-        windSpeed: Math.sqrt(d.u10 ** 2 + d.v10 ** 2).toFixed(2),
-        t2: (d.t2 - 273.15)?.toFixed(1),
-        msl: (d.msl / 100)?.toFixed(1),
+        windSpeed: parseFloat(Math.sqrt(d.u10 ** 2 + d.v10 ** 2).toFixed(2)),
+        t2: parseFloat((d.t2 - 273.15).toFixed(1)),
+        msl: parseFloat((d.msl / 100).toFixed(1)),
       }));
 
+      // 6 saatlik filtre (her 6. index)
       const hourly = meteoRes.data.hourly;
-      const meteo = hourly.time.map((ts, i) => ({
-        time: new Date(ts).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit' }),
-        windSpeedMeteo: hourly.windspeed_10m[i]?.toFixed(2),
-        t2Meteo: hourly.temperature_2m[i]?.toFixed(1),
-        mslMeteo: hourly.surface_pressure[i]?.toFixed(1),
-      }));
+      const meteo = hourly.time
+        .filter((_, i) => i % 6 === 0)
+        .map((ts, i) => {
+          const idx = i * 6;
+          return {
+            time: new Date(ts).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit' }),
+            windSpeedMeteo: parseFloat(hourly.windspeed_10m[idx]?.toFixed(2)),
+            t2Meteo: parseFloat(hourly.temperature_2m[idx]?.toFixed(1)),
+            mslMeteo: parseFloat(hourly.pressure_msl[idx]?.toFixed(1)),
+          };
+        });
 
       setForecastData(aiData);
       setMeteoData(meteo);
