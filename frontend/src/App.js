@@ -39,8 +39,15 @@ function App() {
         axios.get(`${API}/forecast`, {
           params: { model, region, lat: selectedLat, lon: selectedLon }
         }),
-        axios.get(`${API}/openmeteo`, {
-          params: { lat: selectedLat, lon: selectedLon }
+        axios.get('https://api.open-meteo.com/v1/forecast', {
+          params: {
+            latitude: selectedLat,
+            longitude: selectedLon,
+            hourly: 'temperature_2m,windspeed_10m,surface_pressure',
+            forecast_days: 10,
+            timezone: 'auto',
+            windspeed_unit: 'ms',
+          }
         })
       ]);
 
@@ -51,11 +58,12 @@ function App() {
         msl: (d.msl / 100)?.toFixed(1),
       }));
 
-      const meteo = meteoRes.data.data.map(d => ({
-        time: new Date(d.timestamp).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit' }),
-        windSpeedMeteo: d.windSpeed?.toFixed(2),
-        t2Meteo: d.t2?.toFixed(1),
-        mslMeteo: d.msl?.toFixed(1),
+      const hourly = meteoRes.data.hourly;
+      const meteo = hourly.time.map((ts, i) => ({
+        time: new Date(ts).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit' }),
+        windSpeedMeteo: hourly.windspeed_10m[i]?.toFixed(2),
+        t2Meteo: hourly.temperature_2m[i]?.toFixed(1),
+        mslMeteo: hourly.surface_pressure[i]?.toFixed(1),
       }));
 
       setForecastData(aiData);
@@ -70,7 +78,6 @@ function App() {
     if (selectedLat && selectedLon) fetchForecast();
   }, [selectedLat, selectedLon, model, region]);
 
-  // AI ve meteo verisini timestamp'e göre birleştir
   const mergedData = forecastData.map(d => {
     const match = meteoData.find(m => m.time === d.time);
     return { ...d, ...(match || {}) };
@@ -86,7 +93,6 @@ function App() {
   return (
     <div className="app">
 
-      {/* HEADER */}
       <header className="header">
         <div className="header-inner">
           <div className="header-logo">
@@ -97,7 +103,6 @@ function App() {
         </div>
       </header>
 
-      {/* HERO */}
       <section className="hero">
         <div className="hero-text">
           <h2>Rüzgar ve Güneş Enerjisi<br /><span>AI ile Tahmin</span></h2>
@@ -105,7 +110,6 @@ function App() {
         </div>
       </section>
 
-      {/* STATS BAR */}
       <div className="stats-bar">
         <div className="stat-item">
           <span className="stat-value">2</span>
@@ -125,7 +129,6 @@ function App() {
         </div>
       </div>
 
-      {/* CONTROLS */}
       <div className="controls">
         <div className="control-group">
           <label>Model</label>
@@ -162,7 +165,6 @@ function App() {
         )}
       </div>
 
-      {/* MAP */}
       <div className="main-content">
         <div className="map-container">
           <MapContainer
@@ -186,7 +188,6 @@ function App() {
           </div>
         )}
 
-        {/* CHARTS */}
         {mergedData.length > 0 && (
           <div className="charts">
             <h2>📊 {model === 'GRAP' ? 'GraphCast' : 'FourCastNet'} Tahmini</h2>
@@ -239,7 +240,6 @@ function App() {
         )}
       </div>
 
-      {/* FOOTER */}
       <footer className="footer">
         <div className="footer-inner">
           <p className="footer-made">
