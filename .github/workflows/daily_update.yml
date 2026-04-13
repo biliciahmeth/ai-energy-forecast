@@ -1,0 +1,30 @@
+name: Daily Data Update
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Her gün saat 06:00 UTC
+  workflow_dispatch:  # Manuel tetikleme için
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Python kur
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Kütüphaneleri kur
+        run: |
+          pip install boto3 xarray netCDF4 s3fs supabase python-dotenv scipy
+
+      - name: Veriyi indir ve işle
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python backend/process_data.py
