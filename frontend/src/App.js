@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from 'react-leaflet';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, CircleMarker, useMap, useMapEvents } from 'react-leaflet';
 import {
   LineChart, Line, ComposedChart, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
@@ -14,6 +14,11 @@ const API = 'https://ai-energy-forecast.onrender.com';
 // ── Referans sistem varsayımları (gerçek bir santral/kurulum değil, örnek göstergedir) ──
 const TURBINE = { cutIn: 3, rated: 12, cutOut: 25, ratedPowerKW: 2000, hubHeight: 80, measureHeight: 10, shearExp: 0.14 };
 const PV = { capacityKW: 5, performanceRatio: 0.8 }; // 5 kWp çatı tipi kurulum
+// Türkiye şebeke elektriği için yaklaşık/gösterge amaçlı ortalama emisyon faktörü.
+// Kaynaktan kaynağa değişir (~380-470 gCO2/kWh); kesin bir resmi rakam değil, karşılaştırma içindir.
+const GRID_EMISSION_FACTOR = 442; // gCO2/kWh
+
+const MODELS = { GRAP: { label: 'GraphCast', color: '#f97316' }, FOUR: { label: 'FourCastNet', color: '#a855f7' } };
 
 const pinIcon = new L.Icon({
   iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
@@ -40,6 +45,50 @@ function round(value, digits) {
   return value == null || Number.isNaN(value) ? null : parseFloat(value.toFixed(digits));
 }
 
+const TOLERANCE_MS = 3 * 60 * 60 * 1000;
+function matchByTime(targetMs, series) {
+  let best = null;
+  let bestDiff = Infinity;
+  for (const d of series) {
+    const diff = Math.abs(d.tsMs - targetMs);
+    if (diff < bestDiff) { bestDiff = diff; best = d; }
+  }
+  return best && bestDiff <= TOLERANCE_MS ? best : null;
+}
+
+function buildAiSeries(rows, selLat, selLon) {
+  const byTimestamp = new Map();
+  for (const d of rows) {
+    const dist = (d.lat - selLat) ** 2 + (d.lon - selLon) ** 2;
+    const existing = byTimestamp.get(d.timestamp);
+    if (!existing || dist < existing.dist) byTimestamp.set(d.timestamp, { row: d, dist });
+  }
+  return Array.from(byTimestamp.values()).map(({ row: d }) => {
+    const windSpeed = parseFloat(Math.sqrt(d.u10 ** 2 + d.v10 ** 2).toFixed(2));
+    return {
+      tsMs: new Date(d.timestamp).getTime(),
+      windSpeed,
+      t2: parseFloat((d.t2 - 273.15).toFixed(1)),
+      msl: parseFloat((d.msl / 100).toFixed(1)),
+    };
+  }).sort((a, b) => a.tsMs - b.tsMs);
+}
+
+function downloadCSV(rows, filename) {
+  if (!rows.length) return;
+  const cols = ['time', 'windSpeedMeteo', 'windSpeedGRAP', 'windSpeedFOUR', 't2Meteo', 'mslMeteo', 'irradiance', 'windPowerMeteo', 'solarPowerMeteo'];
+  const header = cols.join(',');
+  const lines = rows.map(r => cols.map(c => (r[c] ?? '')).join(','));
+  const csv = [header, ...lines].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function LocationPicker({ onSelect }) {
   useMapEvents({
     click(e) {
@@ -49,29 +98,91 @@ function LocationPicker({ onSelect }) {
   return null;
 }
 
+function FlyTo({ target }) {
+  const map = useMap();
+  useEffect(() => {
+    if (target) map.flyTo(target, 9, { duration: 1.2 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
+  return null;
+}
+
+function SkeletonCard() {
+  return <div className="skeleton skeleton-card" />;
+}
+function SkeletonChart() {
+  return <div className="skeleton skeleton-chart" />;
+}
+
 function App() {
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem('theme') || 'light'; } catch { return 'light'; }
+  });
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    try { localStorage.setItem('theme', theme); } catch { /* ignore */ }
+  }, [theme]);
+  const dark = theme === 'dark';
+  const chartTheme = {
+    grid: dark ? '#273041' : '#f3f4f6',
+    tick: dark ? '#7b8699' : '#9ca3af',
+    tooltipBg: dark ? '#1a2130' : '#fff',
+    tooltipBorder: dark ? '#2d3648' : '#e5e7eb',
+  };
+
   const [selectedLat, setSelectedLat] = useState(null);
   const [selectedLon, setSelectedLon] = useState(null);
-  const [model, setModel] = useState('GRAP');
+  const [flyTarget, setFlyTarget] = useState(null);
   const [region, setRegion] = useState('turkey');
-  const [forecastData, setForecastData] = useState([]);
+  const [showGRAP, setShowGRAP] = useState(true);
+  const [showFOUR, setShowFOUR] = useState(true);
   const [meteoData, setMeteoData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showMeteo, setShowMeteo] = useState(true);
 
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+
+  const [heatmap, setHeatmap] = useState([]);
+  const [heatmapLoading, setHeatmapLoading] = useState(true);
+
   const handleLocationSelect = (lat, lon) => {
     setSelectedLat(lat.toFixed(2));
     setSelectedLon(lon.toFixed(2));
+    setSearchResults([]);
   };
 
-  const fetchForecast = async () => {
+  const runSearch = async (e) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    setSearching(true);
+    try {
+      const res = await axios.get('https://nominatim.openstreetmap.org/search', {
+        params: { format: 'json', q: searchQuery, limit: 5 }
+      });
+      setSearchResults(res.data || []);
+    } catch {
+      setSearchResults([]);
+    }
+    setSearching(false);
+  };
+
+  const pickSearchResult = (r) => {
+    const lat = parseFloat(r.lat), lon = parseFloat(r.lon);
+    handleLocationSelect(lat, lon);
+    setFlyTarget([lat, lon]);
+    setSearchQuery(r.display_name.split(',')[0]);
+  };
+
+  const fetchForecast = useCallback(async () => {
     if (!selectedLat || !selectedLon) return;
     setLoading(true);
     try {
-      const [aiRes, meteoRes] = await Promise.all([
-        axios.get(`${API}/forecast`, {
-          params: { model, region, lat: selectedLat, lon: selectedLon }
-        }).catch(() => ({ data: { data: [] } })),
+      const selLat = parseFloat(selectedLat), selLon = parseFloat(selectedLon);
+      const [grapRes, fourRes, meteoRes] = await Promise.all([
+        axios.get(`${API}/forecast`, { params: { model: 'GRAP', region, lat: selectedLat, lon: selectedLon } }).catch(() => ({ data: { data: [] } })),
+        axios.get(`${API}/forecast`, { params: { model: 'FOUR', region, lat: selectedLat, lon: selectedLon } }).catch(() => ({ data: { data: [] } })),
         axios.get('https://api.open-meteo.com/v1/forecast', {
           params: {
             latitude: selectedLat,
@@ -84,76 +195,79 @@ function App() {
         })
       ]);
 
-      const aiRows = aiRes.data.data || [];
+      const grapSeries = buildAiSeries(grapRes.data.data || [], selLat, selLon);
+      const fourSeries = buildAiSeries(fourRes.data.data || [], selLat, selLon);
 
-      // Aynı zaman damgasında birden fazla grid noktası dönebiliyor (bbox içindeki
-      // komşu hücreler) — her timestamp için seçilen konuma en yakın hücreyi al.
-      const byTimestamp = new Map();
-      for (const d of aiRows) {
-        const dist = (d.lat - parseFloat(selectedLat)) ** 2 + (d.lon - parseFloat(selectedLon)) ** 2;
-        const existing = byTimestamp.get(d.timestamp);
-        if (!existing || dist < existing.dist) byTimestamp.set(d.timestamp, { row: d, dist });
-      }
-
-      const aiData = Array.from(byTimestamp.values()).map(({ row: d }) => {
-        const windSpeed = parseFloat(Math.sqrt(d.u10 ** 2 + d.v10 ** 2).toFixed(2));
-        return {
-          tsMs: new Date(d.timestamp).getTime(),
-          windSpeed,
-          t2: parseFloat((d.t2 - 273.15).toFixed(1)),
-          msl: parseFloat((d.msl / 100).toFixed(1)),
-          windPowerAI: round(windPowerKW(windSpeed), 0),
-        };
-      }).sort((a, b) => a.tsMs - b.tsMs);
-
-      // 6 saatlik filtre (her 6. index)
       const hourly = meteoRes.data.hourly;
       const meteo = hourly.time
         .filter((_, i) => i % 6 === 0)
         .map((ts, i) => {
           const idx = i * 6;
+          const tsMs = new Date(ts).getTime();
           const windSpeedMeteo = parseFloat(hourly.windspeed_10m[idx]?.toFixed(2));
           const irradiance = hourly.shortwave_radiation[idx] ?? 0;
+          const grapMatch = matchByTime(tsMs, grapSeries);
+          const fourMatch = matchByTime(tsMs, fourSeries);
           return {
-            tsMs: new Date(ts).getTime(),
+            tsMs,
             time: new Date(ts).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit' }),
+            dateKey: new Date(ts).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric' }),
             windSpeedMeteo,
             t2Meteo: parseFloat(hourly.temperature_2m[idx]?.toFixed(1)),
             mslMeteo: parseFloat(hourly.pressure_msl[idx]?.toFixed(1)),
             irradiance: round(irradiance, 0),
             windPowerMeteo: round(windPowerKW(windSpeedMeteo), 0),
             solarPowerMeteo: round(solarPowerKW(irradiance), 1),
+            windSpeedGRAP: grapMatch ? grapMatch.windSpeed : null,
+            t2GRAP: grapMatch ? grapMatch.t2 : null,
+            mslGRAP: grapMatch ? grapMatch.msl : null,
+            windSpeedFOUR: fourMatch ? fourMatch.windSpeed : null,
+            t2FOUR: fourMatch ? fourMatch.t2 : null,
+            mslFOUR: fourMatch ? fourMatch.msl : null,
           };
         });
 
-      setForecastData(aiData);
       setMeteoData(meteo);
     } catch (err) {
       console.error(err);
     }
     setLoading(false);
-  };
+  }, [selectedLat, selectedLon, region]);
 
+  useEffect(() => { fetchForecast(); }, [fetchForecast]);
+
+  // Türkiye geneli rüzgar potansiyeli ısı haritası — mevcut GraphCast verisinden
+  // nokta başına ortalama rüzgar gücü hesaplanır (tek seferlik, sayfa açılışında).
   useEffect(() => {
-    if (selectedLat && selectedLon) fetchForecast();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedLat, selectedLon, model, region]);
+    (async () => {
+      setHeatmapLoading(true);
+      try {
+        const res = await axios.get(`${API}/forecast`, { params: { model: 'GRAP', region: 'turkey' } });
+        const rows = res.data.data || [];
+        const byCell = new Map();
+        for (const d of rows) {
+          const key = `${d.lat},${d.lon}`;
+          const speed = Math.sqrt(d.u10 ** 2 + d.v10 ** 2);
+          if (!byCell.has(key)) byCell.set(key, { lat: d.lat, lon: d.lon, sum: 0, n: 0 });
+          const cell = byCell.get(key);
+          cell.sum += speed;
+          cell.n += 1;
+        }
+        const cells = Array.from(byCell.values()).map(c => {
+          const avgSpeed = c.sum / c.n;
+          return { lat: c.lat, lon: c.lon, avgSpeed, avgPowerKW: windPowerKW(avgSpeed) };
+        }).sort((a, b) => b.avgPowerKW - a.avgPowerKW);
+        setHeatmap(cells);
+      } catch {
+        setHeatmap([]);
+      }
+      setHeatmapLoading(false);
+    })();
+  }, []);
 
-  // AI tahmini (model çalıştığı anın verisi) ile canlı meteoroloji tahmini (her
-  // zaman "şu an"dan başlar) farklı zaman pencerelerinden gelebilir. Aynı saatte
-  // birebir eşleşme yerine, 3 saatlik tolerans içinde en yakın AI noktasını eşle.
-  const TOLERANCE_MS = 3 * 60 * 60 * 1000;
-  const mergedData = meteoData.map(m => {
-    let closest = null;
-    let closestDiff = Infinity;
-    for (const d of forecastData) {
-      const diff = Math.abs(d.tsMs - m.tsMs);
-      if (diff < closestDiff) { closestDiff = diff; closest = d; }
-    }
-    const match = closest && closestDiff <= TOLERANCE_MS ? closest : null;
-    return { ...m, ...(match || {}) };
-  });
-  const aiAvailable = mergedData.some(d => d.windSpeed != null);
+  const aiAvailableGRAP = useMemo(() => meteoData.some(d => d.windSpeedGRAP != null), [meteoData]);
+  const aiAvailableFOUR = useMemo(() => meteoData.some(d => d.windSpeedFOUR != null), [meteoData]);
+  const anyAiAvailable = aiAvailableGRAP || aiAvailableFOUR;
 
   const regionCenters = {
     turkey: [39, 35],
@@ -163,7 +277,7 @@ function App() {
   };
 
   // Önümüzdeki 24 saatlik (4 nokta, 6'şar saat) ortalamalara göre özet üretim göstergeleri
-  const next24 = mergedData.slice(0, 4);
+  const next24 = meteoData.slice(0, 4);
   const avgWindPower = next24.length
     ? next24.reduce((s, d) => s + (d.windPowerMeteo || 0), 0) / next24.length
     : null;
@@ -174,6 +288,24 @@ function App() {
   const estDailyKWh = avgWindPower != null && avgSolarPower != null
     ? (avgWindPower + avgSolarPower) * 24
     : null;
+  const dailyCO2SavedKg = estDailyKWh != null ? (estDailyKWh * GRID_EMISSION_FACTOR) / 1000 : null;
+
+  // Haftalık özet: güne göre ortalama toplam güç, en verimli 3 gün
+  const bestDays = useMemo(() => {
+    const byDay = new Map();
+    for (const d of meteoData) {
+      if (!byDay.has(d.dateKey)) byDay.set(d.dateKey, { day: d.dateKey, sum: 0, n: 0 });
+      const entry = byDay.get(d.dateKey);
+      entry.sum += (d.windPowerMeteo || 0) + (d.solarPowerMeteo || 0);
+      entry.n += 1;
+    }
+    return Array.from(byDay.values())
+      .map(e => ({ day: e.day, avgPower: e.sum / e.n }))
+      .sort((a, b) => b.avgPower - a.avgPower)
+      .slice(0, 3);
+  }, [meteoData]);
+
+  const topLocations = heatmap.slice(0, 10);
 
   return (
     <div className="app">
@@ -184,7 +316,12 @@ function App() {
             <span className="logo-icon">⚡</span>
             <h1>AI Energy Forecast</h1>
           </div>
-          <span className="header-sub">NOAA MLWP · GraphCast · FourCastNet</span>
+          <div className="header-right">
+            <span className="header-sub">NOAA MLWP · GraphCast · FourCastNet</span>
+            <button className="theme-toggle" onClick={() => setTheme(dark ? 'light' : 'dark')} title="Tema değiştir">
+              {dark ? '☀️' : '🌙'}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -214,13 +351,36 @@ function App() {
         </div>
       </div>
 
+      <form className="search-bar" onSubmit={runSearch}>
+        <input
+          type="text"
+          placeholder="🔍 Bir şehir ara (örn. İzmir, Berlin, Texas)..."
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
+        />
+        <button type="submit" disabled={searching}>{searching ? '...' : 'Ara'}</button>
+        {searchResults.length > 0 && (
+          <ul className="search-results">
+            {searchResults.map((r, i) => (
+              <li key={i} onClick={() => pickSearchResult(r)}>{r.display_name}</li>
+            ))}
+          </ul>
+        )}
+      </form>
+
       <div className="controls">
         <div className="control-group">
-          <label>Model</label>
-          <select value={model} onChange={e => setModel(e.target.value)}>
-            <option value="GRAP">GraphCast</option>
-            <option value="FOUR">FourCastNet</option>
-          </select>
+          <label>Modeller</label>
+          <div className="model-checkboxes">
+            <label className="chip" style={{ '--chip-color': MODELS.GRAP.color }}>
+              <input type="checkbox" checked={showGRAP} onChange={e => setShowGRAP(e.target.checked)} />
+              GraphCast
+            </label>
+            <label className="chip" style={{ '--chip-color': MODELS.FOUR.color }}>
+              <input type="checkbox" checked={showFOUR} onChange={e => setShowFOUR(e.target.checked)} />
+              FourCastNet
+            </label>
+          </div>
         </div>
         <div className="control-group">
           <label>Bölge</label>
@@ -236,7 +396,7 @@ function App() {
             📍 {selectedLat}°N, {selectedLon}°E
           </div>
         )}
-        {mergedData.length > 0 && (
+        {meteoData.length > 0 && (
           <div className="toggle-group">
             <label className="toggle-label">
               <input
@@ -248,9 +408,14 @@ function App() {
             </label>
           </div>
         )}
+        {meteoData.length > 0 && (
+          <button type="button" className="csv-btn" onClick={() => downloadCSV(meteoData, `enerji-tahmini-${selectedLat}-${selectedLon}.csv`)}>
+            ⬇️ CSV indir
+          </button>
+        )}
       </div>
 
-      {!aiAvailable && selectedLat && (
+      {!anyAiAvailable && selectedLat && !loading && (
         <div className="info-banner">
           ℹ️ AI model verisi (GraphCast/FourCastNet) şu an yalnızca <strong>Türkiye</strong> bölgesi için işleniyor. Bu nokta için yalnızca açık meteoroloji tahmini gösteriliyor.
         </div>
@@ -268,6 +433,7 @@ function App() {
               attribution='© OpenStreetMap'
             />
             <LocationPicker onSelect={handleLocationSelect} />
+            <FlyTo target={flyTarget} />
             {selectedLat && selectedLon && (
               <Marker position={[parseFloat(selectedLat), parseFloat(selectedLon)]} icon={pinIcon}>
                 <Popup>
@@ -278,17 +444,20 @@ function App() {
               </Marker>
             )}
           </MapContainer>
-          <p className="map-hint">🖱️ Haritada bir noktaya tıklayın</p>
+          <p className="map-hint">🖱️ Haritada bir noktaya tıklayın ya da yukarıdan şehir arayın</p>
         </div>
 
         {loading && (
-          <div className="loading">
-            <div className="loading-spinner"></div>
-            <span>Veri yükleniyor...</span>
-          </div>
+          <>
+            <div className="power-summary">
+              <SkeletonCard /><SkeletonCard /><SkeletonCard /><SkeletonCard />
+            </div>
+            <SkeletonChart />
+            <SkeletonChart />
+          </>
         )}
 
-        {mergedData.length > 0 && (
+        {!loading && meteoData.length > 0 && (
           <>
             <div className="power-summary">
               <div className="power-card">
@@ -319,25 +488,47 @@ function App() {
                   <span className="power-label">Tahmini Günlük Üretim</span>
                 </div>
               </div>
+              <div className="power-card">
+                <span className="power-icon">🌍</span>
+                <div>
+                  <span className="power-value">{dailyCO2SavedKg != null ? dailyCO2SavedKg.toFixed(0) : '–'} <small>kg CO₂</small></span>
+                  <span className="power-label">Tahmini Günlük Karbon Tasarrufu</span>
+                </div>
+              </div>
             </div>
             <p className="power-disclaimer">
-              Referans sistem: {TURBINE.ratedPowerKW / 1000} MW rüzgar türbini ({TURBINE.hubHeight} m göbek yüksekliği) + {PV.capacityKW} kWp çatı tipi güneş paneli. Gerçek bir santral verisi değildir, örnek/gösterge amaçlıdır.
+              Referans sistem: {TURBINE.ratedPowerKW / 1000} MW rüzgar türbini ({TURBINE.hubHeight} m göbek yüksekliği) + {PV.capacityKW} kWp çatı tipi güneş paneli. Karbon tasarrufu, Türkiye şebeke elektriği için yaklaşık ~{GRID_EMISSION_FACTOR} gCO₂/kWh gösterge değeriyle hesaplanmıştır. Gerçek bir santral verisi değildir, örnek/gösterge amaçlıdır.
             </p>
 
+            {bestDays.length > 0 && (
+              <div className="best-days">
+                <h3>🏆 Önümüzdeki 10 Günün En Verimli Günleri</h3>
+                <div className="best-days-list">
+                  {bestDays.map((d, i) => (
+                    <div className="best-day-chip" key={d.day}>
+                      <span className="rank">#{i + 1}</span>
+                      <span className="day">{d.day}</span>
+                      <span className="power">~{d.avgPower.toFixed(0)} kW ort.</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="charts">
-              <h2>📊 {model === 'GRAP' ? 'GraphCast' : 'FourCastNet'} Tahmini</h2>
+              <h2>📊 Tahmin Grafikleri</h2>
 
               <div className="chart-box">
                 <h3>⚡ Tahmini Güç Üretimi (kW)</h3>
                 <ResponsiveContainer width="100%" height={260}>
-                  <ComposedChart data={mergedData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                    <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                    <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
+                  <ComposedChart data={meteoData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
+                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: chartTheme.tick }} />
+                    <YAxis tick={{ fontSize: 11, fill: chartTheme.tick }} />
+                    <Tooltip contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '8px', fontSize: '0.85rem' }} />
                     <Legend />
-                    <Area type="monotone" dataKey="solarPowerMeteo" stroke="#eab308" fill="#fef08a" name="Güneş (kW)" strokeWidth={2} />
-                    <Area type="monotone" dataKey="windPowerMeteo" stroke="#3b82f6" fill="#bfdbfe" name="Rüzgar (kW)" strokeWidth={2} />
+                    <Area type="monotone" dataKey="solarPowerMeteo" stroke="#eab308" fill="#fef08a" fillOpacity={dark ? 0.25 : 1} name="Güneş (kW)" strokeWidth={2} />
+                    <Area type="monotone" dataKey="windPowerMeteo" stroke="#3b82f6" fill="#bfdbfe" fillOpacity={dark ? 0.25 : 1} name="Rüzgar (kW)" strokeWidth={2} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
@@ -345,14 +536,15 @@ function App() {
               <div className="chart-box">
                 <h3>💨 Rüzgar Hızı (m/s)</h3>
                 <ResponsiveContainer width="100%" height={250}>
-                  <LineChart data={mergedData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                    <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                    <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
+                  <LineChart data={meteoData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
+                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: chartTheme.tick }} />
+                    <YAxis tick={{ fontSize: 11, fill: chartTheme.tick }} />
+                    <Tooltip contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '8px', fontSize: '0.85rem' }} />
                     <Legend />
-                    {aiAvailable && <Line type="monotone" dataKey="windSpeed" stroke="#f97316" name="AI Tahmini" dot={false} strokeWidth={2} />}
-                    {showMeteo && <Line type="monotone" dataKey="windSpeedMeteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={aiAvailable ? "5 3" : ""} />}
+                    {showGRAP && aiAvailableGRAP && <Line type="monotone" dataKey="windSpeedGRAP" stroke={MODELS.GRAP.color} name="GraphCast" dot={false} strokeWidth={2} />}
+                    {showFOUR && aiAvailableFOUR && <Line type="monotone" dataKey="windSpeedFOUR" stroke={MODELS.FOUR.color} name="FourCastNet" dot={false} strokeWidth={2} />}
+                    {showMeteo && <Line type="monotone" dataKey="windSpeedMeteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={anyAiAvailable ? "5 3" : ""} />}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -360,12 +552,12 @@ function App() {
               <div className="chart-box">
                 <h3>🌤️ Güneş Işınımı (W/m²)</h3>
                 <ResponsiveContainer width="100%" height={220}>
-                  <AreaChart data={mergedData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                    <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                    <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
-                    <Area type="monotone" dataKey="irradiance" stroke="#eab308" fill="#fef9c3" name="Işınım (W/m²)" strokeWidth={2} />
+                  <AreaChart data={meteoData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
+                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: chartTheme.tick }} />
+                    <YAxis tick={{ fontSize: 11, fill: chartTheme.tick }} />
+                    <Tooltip contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '8px', fontSize: '0.85rem' }} />
+                    <Area type="monotone" dataKey="irradiance" stroke="#eab308" fill="#fef9c3" fillOpacity={dark ? 0.25 : 1} name="Işınım (W/m²)" strokeWidth={2} />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -373,14 +565,15 @@ function App() {
               <div className="chart-box">
                 <h3>🌡️ Sıcaklık (°C)</h3>
                 <ResponsiveContainer width="100%" height={250}>
-                  <LineChart data={mergedData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                    <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                    <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
+                  <LineChart data={meteoData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
+                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: chartTheme.tick }} />
+                    <YAxis tick={{ fontSize: 11, fill: chartTheme.tick }} />
+                    <Tooltip contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '8px', fontSize: '0.85rem' }} />
                     <Legend />
-                    {aiAvailable && <Line type="monotone" dataKey="t2" stroke="#f97316" name="AI Tahmini" dot={false} strokeWidth={2} />}
-                    {showMeteo && <Line type="monotone" dataKey="t2Meteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={aiAvailable ? "5 3" : ""} />}
+                    {showGRAP && aiAvailableGRAP && <Line type="monotone" dataKey="t2GRAP" stroke={MODELS.GRAP.color} name="GraphCast" dot={false} strokeWidth={2} />}
+                    {showFOUR && aiAvailableFOUR && <Line type="monotone" dataKey="t2FOUR" stroke={MODELS.FOUR.color} name="FourCastNet" dot={false} strokeWidth={2} />}
+                    {showMeteo && <Line type="monotone" dataKey="t2Meteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={anyAiAvailable ? "5 3" : ""} />}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -388,20 +581,66 @@ function App() {
               <div className="chart-box">
                 <h3>🔵 Deniz Seviyesi Basıncı (hPa)</h3>
                 <ResponsiveContainer width="100%" height={250}>
-                  <LineChart data={mergedData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                    <YAxis domain={[950, 1050]} tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                    <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
+                  <LineChart data={meteoData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
+                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: chartTheme.tick }} />
+                    <YAxis domain={[950, 1050]} tick={{ fontSize: 11, fill: chartTheme.tick }} />
+                    <Tooltip contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '8px', fontSize: '0.85rem' }} />
                     <Legend />
-                    {aiAvailable && <Line type="monotone" dataKey="msl" stroke="#f97316" name="AI Tahmini" dot={false} strokeWidth={2} />}
-                    {showMeteo && <Line type="monotone" dataKey="mslMeteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={aiAvailable ? "5 3" : ""} />}
+                    {showGRAP && aiAvailableGRAP && <Line type="monotone" dataKey="mslGRAP" stroke={MODELS.GRAP.color} name="GraphCast" dot={false} strokeWidth={2} />}
+                    {showFOUR && aiAvailableFOUR && <Line type="monotone" dataKey="mslFOUR" stroke={MODELS.FOUR.color} name="FourCastNet" dot={false} strokeWidth={2} />}
+                    {showMeteo && <Line type="monotone" dataKey="mslMeteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={anyAiAvailable ? "5 3" : ""} />}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
             </div>
           </>
         )}
+
+        <div className="heatmap-section">
+          <h2>🗺️ Türkiye Rüzgar Potansiyeli Haritası</h2>
+          <p className="section-note">GraphCast modelinin elindeki tüm Türkiye grid noktalarının ortalama rüzgar gücüne göre renklendirilmesi. Kısa vadeli model verisinin ortalamasıdır, uzun dönemli bir rüzgar kaynağı etüdü değildir.</p>
+          {heatmapLoading ? (
+            <SkeletonChart />
+          ) : heatmap.length === 0 ? (
+            <p className="section-note">Şu an ısı haritası verisi yok.</p>
+          ) : (
+            <>
+              <div className="map-container">
+                <MapContainer center={[39, 35]} zoom={5} style={{ height: '380px', width: '100%' }}>
+                  <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='© OpenStreetMap' />
+                  {heatmap.map((c, i) => {
+                    const maxPower = heatmap[0].avgPowerKW || 1;
+                    const ratio = c.avgPowerKW / maxPower;
+                    const color = ratio > 0.66 ? '#16a34a' : ratio > 0.33 ? '#eab308' : '#ef4444';
+                    return (
+                      <CircleMarker key={i} center={[c.lat, c.lon]} radius={5} pathOptions={{ color, fillColor: color, fillOpacity: 0.7, weight: 1 }}>
+                        <Popup>📍 {c.lat.toFixed(2)}°N, {c.lon.toFixed(2)}°E<br />💨 ~{c.avgPowerKW.toFixed(0)} kW ort.</Popup>
+                      </CircleMarker>
+                    );
+                  })}
+                </MapContainer>
+              </div>
+              <div className="top-locations">
+                <h3>🏅 En Yüksek Potansiyelli 10 Lokasyon</h3>
+                <table className="top-locations-table">
+                  <thead>
+                    <tr><th>#</th><th>Konum</th><th>Ort. Rüzgar Gücü</th></tr>
+                  </thead>
+                  <tbody>
+                    {topLocations.map((c, i) => (
+                      <tr key={i} onClick={() => { handleLocationSelect(c.lat, c.lon); setFlyTarget([c.lat, c.lon]); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>
+                        <td>{i + 1}</td>
+                        <td>{c.lat.toFixed(2)}°N, {c.lon.toFixed(2)}°E</td>
+                        <td>~{c.avgPowerKW.toFixed(0)} kW</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       <footer className="footer">
