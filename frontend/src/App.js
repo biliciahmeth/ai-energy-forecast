@@ -1,11 +1,44 @@
 import React, { useState, useEffect } from 'react';
-import { MapContainer, TileLayer, useMapEvents } from 'react-leaflet';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from 'react-leaflet';
+import {
+  LineChart, Line, ComposedChart, AreaChart, Area,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
+} from 'recharts';
 import axios from 'axios';
+import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './App.css';
 
 const API = 'https://ai-energy-forecast.onrender.com';
+
+// ── Referans sistem varsayımları (gerçek bir santral/kurulum değil, örnek göstergedir) ──
+const TURBINE = { cutIn: 3, rated: 12, cutOut: 25, ratedPowerKW: 2000, hubHeight: 80, measureHeight: 10, shearExp: 0.14 };
+const PV = { capacityKW: 5, performanceRatio: 0.8 }; // 5 kWp çatı tipi kurulum
+
+const pinIcon = new L.Icon({
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+});
+
+function windPowerKW(speedAt10m) {
+  if (speedAt10m == null || Number.isNaN(speedAt10m)) return null;
+  const vHub = speedAt10m * Math.pow(TURBINE.hubHeight / TURBINE.measureHeight, TURBINE.shearExp);
+  if (vHub < TURBINE.cutIn || vHub >= TURBINE.cutOut) return 0;
+  if (vHub >= TURBINE.rated) return TURBINE.ratedPowerKW;
+  const frac = (vHub ** 3 - TURBINE.cutIn ** 3) / (TURBINE.rated ** 3 - TURBINE.cutIn ** 3);
+  return Math.max(0, TURBINE.ratedPowerKW * frac);
+}
+
+function solarPowerKW(irradianceWm2) {
+  if (irradianceWm2 == null || Number.isNaN(irradianceWm2)) return null;
+  return Math.max(0, PV.capacityKW * (irradianceWm2 / 1000) * PV.performanceRatio);
+}
+
+function round(value, digits) {
+  return value == null || Number.isNaN(value) ? null : parseFloat(value.toFixed(digits));
+}
 
 function LocationPicker({ onSelect }) {
   useMapEvents({
@@ -25,6 +58,7 @@ function App() {
   const [meteoData, setMeteoData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showMeteo, setShowMeteo] = useState(true);
+  const [aiAvailable, setAiAvailable] = useState(true);
 
   const handleLocationSelect = (lat, lon) => {
     setSelectedLat(lat.toFixed(2));
@@ -38,12 +72,12 @@ function App() {
       const [aiRes, meteoRes] = await Promise.all([
         axios.get(`${API}/forecast`, {
           params: { model, region, lat: selectedLat, lon: selectedLon }
-        }),
+        }).catch(() => ({ data: { data: [] } })),
         axios.get('https://api.open-meteo.com/v1/forecast', {
           params: {
             latitude: selectedLat,
             longitude: selectedLon,
-            hourly: 'temperature_2m,windspeed_10m,pressure_msl',
+            hourly: 'temperature_2m,windspeed_10m,pressure_msl,shortwave_radiation',
             forecast_days: 10,
             timezone: 'auto',
             windspeed_unit: 'ms',
@@ -51,12 +85,19 @@ function App() {
         })
       ]);
 
-      const aiData = aiRes.data.data.map(d => ({
-        time: new Date(d.timestamp).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit' }),
-        windSpeed: parseFloat(Math.sqrt(d.u10 ** 2 + d.v10 ** 2).toFixed(2)),
-        t2: parseFloat((d.t2 - 273.15).toFixed(1)),
-        msl: parseFloat((d.msl / 100).toFixed(1)),
-      }));
+      const aiRows = aiRes.data.data || [];
+      setAiAvailable(aiRows.length > 0);
+
+      const aiData = aiRows.map(d => {
+        const windSpeed = parseFloat(Math.sqrt(d.u10 ** 2 + d.v10 ** 2).toFixed(2));
+        return {
+          time: new Date(d.timestamp).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit' }),
+          windSpeed,
+          t2: parseFloat((d.t2 - 273.15).toFixed(1)),
+          msl: parseFloat((d.msl / 100).toFixed(1)),
+          windPowerAI: round(windPowerKW(windSpeed), 0),
+        };
+      });
 
       // 6 saatlik filtre (her 6. index)
       const hourly = meteoRes.data.hourly;
@@ -64,11 +105,16 @@ function App() {
         .filter((_, i) => i % 6 === 0)
         .map((ts, i) => {
           const idx = i * 6;
+          const windSpeedMeteo = parseFloat(hourly.windspeed_10m[idx]?.toFixed(2));
+          const irradiance = hourly.shortwave_radiation[idx] ?? 0;
           return {
             time: new Date(ts).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit' }),
-            windSpeedMeteo: parseFloat(hourly.windspeed_10m[idx]?.toFixed(2)),
+            windSpeedMeteo,
             t2Meteo: parseFloat(hourly.temperature_2m[idx]?.toFixed(1)),
             mslMeteo: parseFloat(hourly.pressure_msl[idx]?.toFixed(1)),
+            irradiance: round(irradiance, 0),
+            windPowerMeteo: round(windPowerKW(windSpeedMeteo), 0),
+            solarPowerMeteo: round(solarPowerKW(irradiance), 1),
           };
         });
 
@@ -82,11 +128,12 @@ function App() {
 
   useEffect(() => {
     if (selectedLat && selectedLon) fetchForecast();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLat, selectedLon, model, region]);
 
-  const mergedData = forecastData.map(d => {
-    const match = meteoData.find(m => m.time === d.time);
-    return { ...d, ...(match || {}) };
+  const mergedData = meteoData.map(m => {
+    const match = forecastData.find(d => d.time === m.time);
+    return { ...m, ...(match || {}) };
   });
 
   const regionCenters = {
@@ -95,6 +142,19 @@ function App() {
     america: [40, -100],
     africa: [0, 20],
   };
+
+  // Önümüzdeki 24 saatlik (4 nokta, 6'şar saat) ortalamalara göre özet üretim göstergeleri
+  const next24 = mergedData.slice(0, 4);
+  const avgWindPower = next24.length
+    ? next24.reduce((s, d) => s + (d.windPowerMeteo || 0), 0) / next24.length
+    : null;
+  const avgSolarPower = next24.length
+    ? next24.reduce((s, d) => s + (d.solarPowerMeteo || 0), 0) / next24.length
+    : null;
+  const windCapacityFactor = avgWindPower != null ? (avgWindPower / TURBINE.ratedPowerKW) * 100 : null;
+  const estDailyKWh = avgWindPower != null && avgSolarPower != null
+    ? (avgWindPower + avgSolarPower) * 24
+    : null;
 
   return (
     <div className="app">
@@ -112,7 +172,7 @@ function App() {
       <section className="hero">
         <div className="hero-text">
           <h2>Rüzgar ve Güneş Enerjisi<br /><span>AI ile Tahmin</span></h2>
-          <p>Dünyanın herhangi bir noktası için NOAA açık meteoroloji verisi ve yapay zeka modelleriyle rüzgar hızı, sıcaklık ve atmosfer basıncı tahminleri.</p>
+          <p>Dünyanın herhangi bir noktası için NOAA açık meteoroloji verisi ve yapay zeka modelleriyle rüzgar hızı, sıcaklık, atmosfer basıncı ve tahmini enerji üretimi.</p>
         </div>
       </section>
 
@@ -157,7 +217,7 @@ function App() {
             📍 {selectedLat}°N, {selectedLon}°E
           </div>
         )}
-        {forecastData.length > 0 && (
+        {mergedData.length > 0 && (
           <div className="toggle-group">
             <label className="toggle-label">
               <input
@@ -171,6 +231,12 @@ function App() {
         )}
       </div>
 
+      {!aiAvailable && selectedLat && (
+        <div className="info-banner">
+          ℹ️ AI model verisi (GraphCast/FourCastNet) şu an yalnızca <strong>Türkiye</strong> bölgesi için işleniyor. Bu nokta için yalnızca açık meteoroloji tahmini gösteriliyor.
+        </div>
+      )}
+
       <div className="main-content">
         <div className="map-container">
           <MapContainer
@@ -183,6 +249,15 @@ function App() {
               attribution='© OpenStreetMap'
             />
             <LocationPicker onSelect={handleLocationSelect} />
+            {selectedLat && selectedLon && (
+              <Marker position={[parseFloat(selectedLat), parseFloat(selectedLon)]} icon={pinIcon}>
+                <Popup>
+                  📍 {selectedLat}°N, {selectedLon}°E<br />
+                  {avgWindPower != null && <>💨 ~{avgWindPower.toFixed(0)} kW rüzgar<br /></>}
+                  {avgSolarPower != null && <>☀️ ~{avgSolarPower.toFixed(1)} kW güneş</>}
+                </Popup>
+              </Marker>
+            )}
           </MapContainer>
           <p className="map-hint">🖱️ Haritada bir noktaya tıklayın</p>
         </div>
@@ -195,54 +270,118 @@ function App() {
         )}
 
         {mergedData.length > 0 && (
-          <div className="charts">
-            <h2>📊 {model === 'GRAP' ? 'GraphCast' : 'FourCastNet'} Tahmini</h2>
-
-            <div className="chart-box">
-              <h3>💨 Rüzgar Hızı (m/s)</h3>
-              <ResponsiveContainer width="100%" height={250}>
-                <LineChart data={mergedData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                  <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                  <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                  <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
-                  <Legend />
-                  <Line type="monotone" dataKey="windSpeed" stroke="#f97316" name="AI Tahmini" dot={false} strokeWidth={2} />
-                  {showMeteo && <Line type="monotone" dataKey="windSpeedMeteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray="5 3" />}
-                </LineChart>
-              </ResponsiveContainer>
+          <>
+            <div className="power-summary">
+              <div className="power-card">
+                <span className="power-icon">💨</span>
+                <div>
+                  <span className="power-value">{avgWindPower != null ? avgWindPower.toFixed(0) : '–'} <small>kW</small></span>
+                  <span className="power-label">Ort. Rüzgar Gücü (24s)</span>
+                </div>
+              </div>
+              <div className="power-card">
+                <span className="power-icon">☀️</span>
+                <div>
+                  <span className="power-value">{avgSolarPower != null ? avgSolarPower.toFixed(1) : '–'} <small>kW</small></span>
+                  <span className="power-label">Ort. Güneş Gücü (24s)</span>
+                </div>
+              </div>
+              <div className="power-card">
+                <span className="power-icon">📈</span>
+                <div>
+                  <span className="power-value">{windCapacityFactor != null ? windCapacityFactor.toFixed(0) : '–'}<small>%</small></span>
+                  <span className="power-label">Rüzgar Kapasite Faktörü</span>
+                </div>
+              </div>
+              <div className="power-card">
+                <span className="power-icon">🔋</span>
+                <div>
+                  <span className="power-value">{estDailyKWh != null ? estDailyKWh.toFixed(0) : '–'} <small>kWh</small></span>
+                  <span className="power-label">Tahmini Günlük Üretim</span>
+                </div>
+              </div>
             </div>
+            <p className="power-disclaimer">
+              Referans sistem: {TURBINE.ratedPowerKW / 1000} MW rüzgar türbini ({TURBINE.hubHeight} m göbek yüksekliği) + {PV.capacityKW} kWp çatı tipi güneş paneli. Gerçek bir santral verisi değildir, örnek/gösterge amaçlıdır.
+            </p>
 
-            <div className="chart-box">
-              <h3>🌡️ Sıcaklık (°C)</h3>
-              <ResponsiveContainer width="100%" height={250}>
-                <LineChart data={mergedData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                  <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                  <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                  <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
-                  <Legend />
-                  <Line type="monotone" dataKey="t2" stroke="#f97316" name="AI Tahmini" dot={false} strokeWidth={2} />
-                  {showMeteo && <Line type="monotone" dataKey="t2Meteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray="5 3" />}
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+            <div className="charts">
+              <h2>📊 {model === 'GRAP' ? 'GraphCast' : 'FourCastNet'} Tahmini</h2>
 
-            <div className="chart-box">
-              <h3>🔵 Deniz Seviyesi Basıncı (hPa)</h3>
-              <ResponsiveContainer width="100%" height={250}>
-                <LineChart data={mergedData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                  <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                  <YAxis domain={[950, 1050]} tick={{ fontSize: 11, fill: '#9ca3af' }} />
-                  <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
-                  <Legend />
-                  <Line type="monotone" dataKey="msl" stroke="#f97316" name="AI Tahmini" dot={false} strokeWidth={2} />
-                  {showMeteo && <Line type="monotone" dataKey="mslMeteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray="5 3" />}
-                </LineChart>
-              </ResponsiveContainer>
+              <div className="chart-box">
+                <h3>⚡ Tahmini Güç Üretimi (kW)</h3>
+                <ResponsiveContainer width="100%" height={260}>
+                  <ComposedChart data={mergedData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                    <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                    <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
+                    <Legend />
+                    <Area type="monotone" dataKey="solarPowerMeteo" stroke="#eab308" fill="#fef08a" name="Güneş (kW)" strokeWidth={2} />
+                    <Area type="monotone" dataKey="windPowerMeteo" stroke="#3b82f6" fill="#bfdbfe" name="Rüzgar (kW)" strokeWidth={2} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="chart-box">
+                <h3>💨 Rüzgar Hızı (m/s)</h3>
+                <ResponsiveContainer width="100%" height={250}>
+                  <LineChart data={mergedData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                    <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                    <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
+                    <Legend />
+                    {aiAvailable && <Line type="monotone" dataKey="windSpeed" stroke="#f97316" name="AI Tahmini" dot={false} strokeWidth={2} />}
+                    {showMeteo && <Line type="monotone" dataKey="windSpeedMeteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={aiAvailable ? "5 3" : ""} />}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="chart-box">
+                <h3>🌤️ Güneş Işınımı (W/m²)</h3>
+                <ResponsiveContainer width="100%" height={220}>
+                  <AreaChart data={mergedData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                    <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                    <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
+                    <Area type="monotone" dataKey="irradiance" stroke="#eab308" fill="#fef9c3" name="Işınım (W/m²)" strokeWidth={2} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="chart-box">
+                <h3>🌡️ Sıcaklık (°C)</h3>
+                <ResponsiveContainer width="100%" height={250}>
+                  <LineChart data={mergedData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                    <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                    <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
+                    <Legend />
+                    {aiAvailable && <Line type="monotone" dataKey="t2" stroke="#f97316" name="AI Tahmini" dot={false} strokeWidth={2} />}
+                    {showMeteo && <Line type="monotone" dataKey="t2Meteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={aiAvailable ? "5 3" : ""} />}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="chart-box">
+                <h3>🔵 Deniz Seviyesi Basıncı (hPa)</h3>
+                <ResponsiveContainer width="100%" height={250}>
+                  <LineChart data={mergedData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                    <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                    <YAxis domain={[950, 1050]} tick={{ fontSize: 11, fill: '#9ca3af' }} />
+                    <Tooltip contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '0.85rem' }} />
+                    <Legend />
+                    {aiAvailable && <Line type="monotone" dataKey="msl" stroke="#f97316" name="AI Tahmini" dot={false} strokeWidth={2} />}
+                    {showMeteo && <Line type="monotone" dataKey="mslMeteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={aiAvailable ? "5 3" : ""} />}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
             </div>
-          </div>
+          </>
         )}
       </div>
 
