@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, CircleMarker, useMap, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Tooltip as LeafletTooltip, CircleMarker, useMap, useMapEvents } from 'react-leaflet';
 import {
   LineChart, Line, ComposedChart, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
@@ -7,6 +7,7 @@ import {
 import axios from 'axios';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import 'leaflet.heat';
 import './App.css';
 import WIND_FARMS from './data/windFarms.json';
 
@@ -105,6 +106,25 @@ function FlyTo({ target }) {
     if (target) map.flyTo(target, 9, { duration: 1.2 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target]);
+  return null;
+}
+
+function HeatLayer({ points, dark }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!points.length) return undefined;
+    const layer = L.heatLayer(points, {
+      radius: 22,
+      blur: 25,
+      maxZoom: 8,
+      max: 1,
+      minOpacity: 0.25,
+      gradient: dark
+        ? { 0.2: '#1d4ed8', 0.45: '#16a34a', 0.7: '#eab308', 1: '#ef4444' }
+        : { 0.2: '#3b82f6', 0.45: '#22c55e', 0.7: '#eab308', 1: '#dc2626' },
+    }).addTo(map);
+    return () => { map.removeLayer(layer); };
+  }, [map, points, dark]);
   return null;
 }
 
@@ -284,6 +304,12 @@ function App() {
         : null;
       return { ...farm, avgSpeed: nearest?.avgSpeed ?? null, capacityFactor, estimatedOutputMW };
     });
+  }, [heatmap]);
+
+  const heatPoints = useMemo(() => {
+    if (heatmap.length === 0) return [];
+    const maxPower = heatmap[0].avgPowerKW || 1;
+    return heatmap.map(c => [c.lat, c.lon, Math.max(0.05, c.avgPowerKW / maxPower)]);
   }, [heatmap]);
 
   const aiAvailableGRAP = useMemo(() => meteoData.some(d => d.windSpeedGRAP != null), [meteoData]);
@@ -630,24 +656,23 @@ function App() {
               <div className="map-container">
                 <MapContainer center={[39, 35]} zoom={5} style={{ height: '420px', width: '100%' }}>
                   <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='© OpenStreetMap' />
-                  {heatmap.map((c, i) => {
-                    const maxPower = heatmap[0].avgPowerKW || 1;
-                    const ratio = c.avgPowerKW / maxPower;
-                    const color = ratio > 0.66 ? '#16a34a' : ratio > 0.33 ? '#eab308' : '#ef4444';
-                    return (
-                      <CircleMarker key={i} center={[c.lat, c.lon]} radius={5} pathOptions={{ color, fillColor: color, fillOpacity: 0.7, weight: 1 }}>
-                        <Popup>📍 {c.lat.toFixed(2)}°N, {c.lon.toFixed(2)}°E<br />💨 ~{c.avgPowerKW.toFixed(0)} kW ort. ({c.avgSpeed.toFixed(1)} m/s)</Popup>
-                      </CircleMarker>
-                    );
-                  })}
+                  <HeatLayer points={heatPoints} dark={dark} />
                   {windFarmsWithOutput.map((f, i) => (
-                    <CircleMarker key={`wf-${i}`} center={[f.lat, f.lon]} radius={4} pathOptions={{ color: '#111827', fillColor: '#ffffff', fillOpacity: 1, weight: 1.5 }}>
-                      <Popup>
-                        ⚙️ <strong>{f.name}</strong><br />
-                        {f.operator && <>{f.operator}<br /></>}
-                        Kurulu güç: {f.capacity_mw != null ? `${f.capacity_mw} MW` : 'bilinmiyor'}<br />
-                        {f.estimatedOutputMW != null && <>Tahmini anlık üretim: ~{f.estimatedOutputMW.toFixed(1)} MW ({(f.capacityFactor * 100).toFixed(0)}% kapasite faktörü)</>}
-                      </Popup>
+                    <CircleMarker
+                      key={`wf-${i}`}
+                      center={[f.lat, f.lon]}
+                      radius={4}
+                      pathOptions={{ color: '#111827', fillColor: '#ffffff', fillOpacity: 1, weight: 1.5 }}
+                    >
+                      <LeafletTooltip direction="top" offset={[0, -4]} opacity={1}>
+                        <div className="turbine-tooltip">
+                          <strong>⚙️ {f.name}</strong><br />
+                          {f.operator && <>{f.operator}<br /></>}
+                          📍 {f.lat.toFixed(2)}°N, {f.lon.toFixed(2)}°E<br />
+                          Kurulu güç: {f.capacity_mw != null ? `${f.capacity_mw} MW` : 'bilinmiyor'}<br />
+                          {f.estimatedOutputMW != null && <>Tahmini üretim: ~{f.estimatedOutputMW.toFixed(1)} MW ({(f.capacityFactor * 100).toFixed(0)}%)</>}
+                        </div>
+                      </LeafletTooltip>
                     </CircleMarker>
                   ))}
                 </MapContainer>

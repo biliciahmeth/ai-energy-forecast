@@ -577,6 +577,13 @@ body {
   letter-spacing: 0.06em;
 }
 
+.turbine-tooltip {
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: #111827;
+  max-width: 220px;
+}
+
 /* ── HEATMAP SECTION ── */
 .heatmap-section {
   margin-top: 36px;
