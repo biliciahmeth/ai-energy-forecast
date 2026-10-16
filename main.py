@@ -28,12 +28,13 @@ def get_forecast(
     region: str = Query("turkey", description="Bölge adı"),
     lat: float = Query(None, description="Enlem"),
     lon: float = Query(None, description="Boylam"),
+    limit: int = Query(500, le=5000, description="Maksimum satır sayısı"),
 ):
     query = supabase.table("forecasts").select("*").eq("model", model).eq("region", region)
     if lat is not None and lon is not None:
         query = query.gte("lat", lat - 0.5).lte("lat", lat + 0.5)
         query = query.gte("lon", lon - 0.5).lte("lon", lon + 0.5)
-    response = query.order("timestamp").limit(500).execute()
+    response = query.order("timestamp").limit(limit).execute()
     return {"data": response.data, "count": len(response.data)}
 
 @app.get("/openmeteo")

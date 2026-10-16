@@ -242,7 +242,7 @@ function App() {
     (async () => {
       setHeatmapLoading(true);
       try {
-        const res = await axios.get(`${API}/forecast`, { params: { model: 'GRAP', region: 'turkey' } });
+        const res = await axios.get(`${API}/forecast`, { params: { model: 'GRAP', region: 'turkey', limit: 2000 } });
         const rows = res.data.data || [];
         const byCell = new Map();
         for (const d of rows) {
