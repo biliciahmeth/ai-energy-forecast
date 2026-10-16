@@ -58,7 +58,6 @@ function App() {
   const [meteoData, setMeteoData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showMeteo, setShowMeteo] = useState(true);
-  const [aiAvailable, setAiAvailable] = useState(true);
 
   const handleLocationSelect = (lat, lon) => {
     setSelectedLat(lat.toFixed(2));
@@ -86,18 +85,26 @@ function App() {
       ]);
 
       const aiRows = aiRes.data.data || [];
-      setAiAvailable(aiRows.length > 0);
 
-      const aiData = aiRows.map(d => {
+      // Aynı zaman damgasında birden fazla grid noktası dönebiliyor (bbox içindeki
+      // komşu hücreler) — her timestamp için seçilen konuma en yakın hücreyi al.
+      const byTimestamp = new Map();
+      for (const d of aiRows) {
+        const dist = (d.lat - parseFloat(selectedLat)) ** 2 + (d.lon - parseFloat(selectedLon)) ** 2;
+        const existing = byTimestamp.get(d.timestamp);
+        if (!existing || dist < existing.dist) byTimestamp.set(d.timestamp, { row: d, dist });
+      }
+
+      const aiData = Array.from(byTimestamp.values()).map(({ row: d }) => {
         const windSpeed = parseFloat(Math.sqrt(d.u10 ** 2 + d.v10 ** 2).toFixed(2));
         return {
-          time: new Date(d.timestamp).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit' }),
+          tsMs: new Date(d.timestamp).getTime(),
           windSpeed,
           t2: parseFloat((d.t2 - 273.15).toFixed(1)),
           msl: parseFloat((d.msl / 100).toFixed(1)),
           windPowerAI: round(windPowerKW(windSpeed), 0),
         };
-      });
+      }).sort((a, b) => a.tsMs - b.tsMs);
 
       // 6 saatlik filtre (her 6. index)
       const hourly = meteoRes.data.hourly;
@@ -108,6 +115,7 @@ function App() {
           const windSpeedMeteo = parseFloat(hourly.windspeed_10m[idx]?.toFixed(2));
           const irradiance = hourly.shortwave_radiation[idx] ?? 0;
           return {
+            tsMs: new Date(ts).getTime(),
             time: new Date(ts).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit' }),
             windSpeedMeteo,
             t2Meteo: parseFloat(hourly.temperature_2m[idx]?.toFixed(1)),
@@ -131,10 +139,21 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLat, selectedLon, model, region]);
 
+  // AI tahmini (model çalıştığı anın verisi) ile canlı meteoroloji tahmini (her
+  // zaman "şu an"dan başlar) farklı zaman pencerelerinden gelebilir. Aynı saatte
+  // birebir eşleşme yerine, 3 saatlik tolerans içinde en yakın AI noktasını eşle.
+  const TOLERANCE_MS = 3 * 60 * 60 * 1000;
   const mergedData = meteoData.map(m => {
-    const match = forecastData.find(d => d.time === m.time);
+    let closest = null;
+    let closestDiff = Infinity;
+    for (const d of forecastData) {
+      const diff = Math.abs(d.tsMs - m.tsMs);
+      if (diff < closestDiff) { closestDiff = diff; closest = d; }
+    }
+    const match = closest && closestDiff <= TOLERANCE_MS ? closest : null;
     return { ...m, ...(match || {}) };
   });
+  const aiAvailable = mergedData.some(d => d.windSpeed != null);
 
   const regionCenters = {
     turkey: [39, 35],
