@@ -649,6 +649,17 @@ body {
   background: var(--input-bg);
 }
 
+.scroll-table-wrap {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.scroll-table-wrap .top-locations-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--card-bg);
+}
+
 /* ── FOOTER ── */
 .footer {
   margin-top: 48px;

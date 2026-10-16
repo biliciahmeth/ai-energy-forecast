@@ -8,6 +8,7 @@ import axios from 'axios';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './App.css';
+import WIND_FARMS from './data/windFarms.json';
 
 const API = 'https://ai-energy-forecast.onrender.com';
 
@@ -264,6 +265,26 @@ function App() {
       setHeatmapLoading(false);
     })();
   }, []);
+
+  // Her santral için en yakın ısı haritası grid hücresindeki rüzgar hızından
+  // genel referans türbin eğrisiyle bir kapasite faktörü çıkarıp, santralin
+  // gerçek kurulu gücüne (capacity_mw) ölçekliyoruz — gerçek türbin modeli
+  // bilinmediği için yaklaşık/gösterge amaçlı bir tahmindir.
+  const windFarmsWithOutput = useMemo(() => {
+    if (heatmap.length === 0) return [];
+    return WIND_FARMS.map(farm => {
+      let nearest = null, bestDist = Infinity;
+      for (const c of heatmap) {
+        const dist = (c.lat - farm.lat) ** 2 + (c.lon - farm.lon) ** 2;
+        if (dist < bestDist) { bestDist = dist; nearest = c; }
+      }
+      const capacityFactor = nearest ? nearest.avgPowerKW / TURBINE.ratedPowerKW : null;
+      const estimatedOutputMW = farm.capacity_mw != null && capacityFactor != null
+        ? farm.capacity_mw * capacityFactor
+        : null;
+      return { ...farm, avgSpeed: nearest?.avgSpeed ?? null, capacityFactor, estimatedOutputMW };
+    });
+  }, [heatmap]);
 
   const aiAvailableGRAP = useMemo(() => meteoData.some(d => d.windSpeedGRAP != null), [meteoData]);
   const aiAvailableFOUR = useMemo(() => meteoData.some(d => d.windSpeedFOUR != null), [meteoData]);
@@ -607,7 +628,7 @@ function App() {
           ) : (
             <>
               <div className="map-container">
-                <MapContainer center={[39, 35]} zoom={5} style={{ height: '380px', width: '100%' }}>
+                <MapContainer center={[39, 35]} zoom={5} style={{ height: '420px', width: '100%' }}>
                   <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='© OpenStreetMap' />
                   {heatmap.map((c, i) => {
                     const maxPower = heatmap[0].avgPowerKW || 1;
@@ -615,29 +636,68 @@ function App() {
                     const color = ratio > 0.66 ? '#16a34a' : ratio > 0.33 ? '#eab308' : '#ef4444';
                     return (
                       <CircleMarker key={i} center={[c.lat, c.lon]} radius={5} pathOptions={{ color, fillColor: color, fillOpacity: 0.7, weight: 1 }}>
-                        <Popup>📍 {c.lat.toFixed(2)}°N, {c.lon.toFixed(2)}°E<br />💨 ~{c.avgPowerKW.toFixed(0)} kW ort.</Popup>
+                        <Popup>📍 {c.lat.toFixed(2)}°N, {c.lon.toFixed(2)}°E<br />💨 ~{c.avgPowerKW.toFixed(0)} kW ort. ({c.avgSpeed.toFixed(1)} m/s)</Popup>
                       </CircleMarker>
                     );
                   })}
+                  {windFarmsWithOutput.map((f, i) => (
+                    <CircleMarker key={`wf-${i}`} center={[f.lat, f.lon]} radius={4} pathOptions={{ color: '#111827', fillColor: '#ffffff', fillOpacity: 1, weight: 1.5 }}>
+                      <Popup>
+                        ⚙️ <strong>{f.name}</strong><br />
+                        {f.operator && <>{f.operator}<br /></>}
+                        Kurulu güç: {f.capacity_mw != null ? `${f.capacity_mw} MW` : 'bilinmiyor'}<br />
+                        {f.estimatedOutputMW != null && <>Tahmini anlık üretim: ~{f.estimatedOutputMW.toFixed(1)} MW ({(f.capacityFactor * 100).toFixed(0)}% kapasite faktörü)</>}
+                      </Popup>
+                    </CircleMarker>
+                  ))}
                 </MapContainer>
               </div>
+              <p className="section-note">⚫⚪ Beyaz/siyah noktalar: OpenStreetMap'te kayıtlı {WIND_FARMS.length} gerçek rüzgar santrali. Tahmini anlık üretim, santralin en yakın grid hücresindeki rüzgar hızı ve genel referans türbin eğrisiyle hesaplanır (gerçek türbin modelleri bilinmediğinden yaklaşıktır). OSM tabanlı liste eksiksiz değildir.</p>
               <div className="top-locations">
                 <h3>🏅 En Yüksek Potansiyelli 10 Lokasyon</h3>
                 <table className="top-locations-table">
                   <thead>
-                    <tr><th>#</th><th>Konum</th><th>Ort. Rüzgar Gücü</th></tr>
+                    <tr><th>#</th><th>Konum</th><th>Ort. Rüzgar Hızı</th><th>Ort. Rüzgar Gücü</th></tr>
                   </thead>
                   <tbody>
                     {topLocations.map((c, i) => (
                       <tr key={i} onClick={() => { handleLocationSelect(c.lat, c.lon); setFlyTarget([c.lat, c.lon]); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>
                         <td>{i + 1}</td>
                         <td>{c.lat.toFixed(2)}°N, {c.lon.toFixed(2)}°E</td>
+                        <td>{c.avgSpeed.toFixed(1)} m/s</td>
                         <td>~{c.avgPowerKW.toFixed(0)} kW</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+
+              {windFarmsWithOutput.length > 0 && (
+                <div className="top-locations">
+                  <h3>⚙️ Aktif Rüzgar Santralleri — Tahmini Üretim ({windFarmsWithOutput.length} santral)</h3>
+                  <div className="scroll-table-wrap">
+                    <table className="top-locations-table">
+                      <thead>
+                        <tr><th>#</th><th>Santral</th><th>Operatör</th><th>Kurulu Güç</th><th>Tahmini Üretim</th><th>Kap. Faktörü</th></tr>
+                      </thead>
+                      <tbody>
+                        {[...windFarmsWithOutput]
+                          .sort((a, b) => (b.estimatedOutputMW || -1) - (a.estimatedOutputMW || -1))
+                          .map((f, i) => (
+                            <tr key={i} onClick={() => { handleLocationSelect(f.lat, f.lon); setFlyTarget([f.lat, f.lon]); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>
+                              <td>{i + 1}</td>
+                              <td>{f.name}</td>
+                              <td>{f.operator || '–'}</td>
+                              <td>{f.capacity_mw != null ? `${f.capacity_mw} MW` : '–'}</td>
+                              <td>{f.estimatedOutputMW != null ? `~${f.estimatedOutputMW.toFixed(1)} MW` : '–'}</td>
+                              <td>{f.capacityFactor != null ? `${(f.capacityFactor * 100).toFixed(0)}%` : '–'}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
