@@ -29,6 +29,13 @@ const pinIcon = new L.Icon({
   iconAnchor: [12, 41],
 });
 
+const pointBIcon = new L.DivIcon({
+  html: '<div class="point-b-marker">B</div>',
+  className: '',
+  iconSize: [26, 26],
+  iconAnchor: [13, 13],
+});
+
 function windPowerKW(speedAt10m) {
   if (speedAt10m == null || Number.isNaN(speedAt10m)) return null;
   const vHub = speedAt10m * Math.pow(TURBINE.hubHeight / TURBINE.measureHeight, TURBINE.shearExp);
@@ -168,9 +175,18 @@ function App() {
   const [heatmap, setHeatmap] = useState([]);
   const [heatmapLoading, setHeatmapLoading] = useState(true);
 
+  const [compareMode, setCompareMode] = useState(false);
+  const [pointB, setPointB] = useState(null);
+  const [meteoDataB, setMeteoDataB] = useState([]);
+  const [loadingB, setLoadingB] = useState(false);
+
   const handleLocationSelect = (lat, lon) => {
-    setSelectedLat(lat.toFixed(2));
-    setSelectedLon(lon.toFixed(2));
+    if (compareMode && selectedLat != null) {
+      setPointB({ lat: lat.toFixed(2), lon: lon.toFixed(2) });
+    } else {
+      setSelectedLat(lat.toFixed(2));
+      setSelectedLon(lon.toFixed(2));
+    }
     setSearchResults([]);
   };
 
@@ -196,66 +212,77 @@ function App() {
     setSearchQuery(r.display_name.split(',')[0]);
   };
 
-  const fetchForecast = useCallback(async () => {
+  const fetchPointData = useCallback(async (lat, lon) => {
+    const selLat = parseFloat(lat), selLon = parseFloat(lon);
+    const [grapRes, fourRes, meteoRes] = await Promise.all([
+      axios.get(`${API}/forecast`, { params: { model: 'GRAP', region, lat, lon } }).catch(() => ({ data: { data: [] } })),
+      axios.get(`${API}/forecast`, { params: { model: 'FOUR', region, lat, lon } }).catch(() => ({ data: { data: [] } })),
+      axios.get('https://api.open-meteo.com/v1/forecast', {
+        params: {
+          latitude: lat,
+          longitude: lon,
+          hourly: 'temperature_2m,windspeed_10m,pressure_msl,shortwave_radiation',
+          forecast_days: 10,
+          timezone: 'auto',
+          windspeed_unit: 'ms',
+        }
+      })
+    ]);
+
+    const grapSeries = buildAiSeries(grapRes.data.data || [], selLat, selLon);
+    const fourSeries = buildAiSeries(fourRes.data.data || [], selLat, selLon);
+
+    const hourly = meteoRes.data.hourly;
+    return hourly.time
+      .filter((_, i) => i % 6 === 0)
+      .map((ts, i) => {
+        const idx = i * 6;
+        const tsMs = new Date(ts).getTime();
+        const windSpeedMeteo = parseFloat(hourly.windspeed_10m[idx]?.toFixed(2));
+        const irradiance = hourly.shortwave_radiation[idx] ?? 0;
+        const grapMatch = matchByTime(tsMs, grapSeries);
+        const fourMatch = matchByTime(tsMs, fourSeries);
+        return {
+          tsMs,
+          time: new Date(ts).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit' }),
+          dateKey: new Date(ts).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric' }),
+          windSpeedMeteo,
+          t2Meteo: parseFloat(hourly.temperature_2m[idx]?.toFixed(1)),
+          mslMeteo: parseFloat(hourly.pressure_msl[idx]?.toFixed(1)),
+          irradiance: round(irradiance, 0),
+          windPowerMeteo: round(windPowerKW(windSpeedMeteo), 0),
+          solarPowerMeteo: round(solarPowerKW(irradiance), 1),
+          windSpeedGRAP: grapMatch ? grapMatch.windSpeed : null,
+          t2GRAP: grapMatch ? grapMatch.t2 : null,
+          mslGRAP: grapMatch ? grapMatch.msl : null,
+          windSpeedFOUR: fourMatch ? fourMatch.windSpeed : null,
+          t2FOUR: fourMatch ? fourMatch.t2 : null,
+          mslFOUR: fourMatch ? fourMatch.msl : null,
+        };
+      });
+  }, [region]);
+
+  useEffect(() => {
     if (!selectedLat || !selectedLon) return;
+    let cancelled = false;
     setLoading(true);
-    try {
-      const selLat = parseFloat(selectedLat), selLon = parseFloat(selectedLon);
-      const [grapRes, fourRes, meteoRes] = await Promise.all([
-        axios.get(`${API}/forecast`, { params: { model: 'GRAP', region, lat: selectedLat, lon: selectedLon } }).catch(() => ({ data: { data: [] } })),
-        axios.get(`${API}/forecast`, { params: { model: 'FOUR', region, lat: selectedLat, lon: selectedLon } }).catch(() => ({ data: { data: [] } })),
-        axios.get('https://api.open-meteo.com/v1/forecast', {
-          params: {
-            latitude: selectedLat,
-            longitude: selectedLon,
-            hourly: 'temperature_2m,windspeed_10m,pressure_msl,shortwave_radiation',
-            forecast_days: 10,
-            timezone: 'auto',
-            windspeed_unit: 'ms',
-          }
-        })
-      ]);
+    fetchPointData(selectedLat, selectedLon)
+      .then(m => { if (!cancelled) setMeteoData(m); })
+      .catch(err => console.error(err))
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedLat, selectedLon, fetchPointData]);
 
-      const grapSeries = buildAiSeries(grapRes.data.data || [], selLat, selLon);
-      const fourSeries = buildAiSeries(fourRes.data.data || [], selLat, selLon);
-
-      const hourly = meteoRes.data.hourly;
-      const meteo = hourly.time
-        .filter((_, i) => i % 6 === 0)
-        .map((ts, i) => {
-          const idx = i * 6;
-          const tsMs = new Date(ts).getTime();
-          const windSpeedMeteo = parseFloat(hourly.windspeed_10m[idx]?.toFixed(2));
-          const irradiance = hourly.shortwave_radiation[idx] ?? 0;
-          const grapMatch = matchByTime(tsMs, grapSeries);
-          const fourMatch = matchByTime(tsMs, fourSeries);
-          return {
-            tsMs,
-            time: new Date(ts).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit' }),
-            dateKey: new Date(ts).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric' }),
-            windSpeedMeteo,
-            t2Meteo: parseFloat(hourly.temperature_2m[idx]?.toFixed(1)),
-            mslMeteo: parseFloat(hourly.pressure_msl[idx]?.toFixed(1)),
-            irradiance: round(irradiance, 0),
-            windPowerMeteo: round(windPowerKW(windSpeedMeteo), 0),
-            solarPowerMeteo: round(solarPowerKW(irradiance), 1),
-            windSpeedGRAP: grapMatch ? grapMatch.windSpeed : null,
-            t2GRAP: grapMatch ? grapMatch.t2 : null,
-            mslGRAP: grapMatch ? grapMatch.msl : null,
-            windSpeedFOUR: fourMatch ? fourMatch.windSpeed : null,
-            t2FOUR: fourMatch ? fourMatch.t2 : null,
-            mslFOUR: fourMatch ? fourMatch.msl : null,
-          };
-        });
-
-      setMeteoData(meteo);
-    } catch (err) {
-      console.error(err);
-    }
-    setLoading(false);
-  }, [selectedLat, selectedLon, region]);
-
-  useEffect(() => { fetchForecast(); }, [fetchForecast]);
+  useEffect(() => {
+    if (!compareMode || !pointB) { setMeteoDataB([]); return undefined; }
+    let cancelled = false;
+    setLoadingB(true);
+    fetchPointData(pointB.lat, pointB.lon)
+      .then(m => { if (!cancelled) setMeteoDataB(m); })
+      .catch(err => console.error(err))
+      .finally(() => { if (!cancelled) setLoadingB(false); });
+    return () => { cancelled = true; };
+  }, [compareMode, pointB, fetchPointData]);
 
   // Türkiye geneli rüzgar potansiyeli ısı haritası — mevcut GraphCast verisinden
   // nokta başına ortalama rüzgar gücü hesaplanır (tek seferlik, sayfa açılışında).
@@ -354,6 +381,33 @@ function App() {
 
   const topLocations = heatmap.slice(0, 10);
 
+  // Karşılaştırma modu: B noktası için aynı özet göstergeler + A/B birleşik güç grafiği
+  const next24B = meteoDataB.slice(0, 4);
+  const avgWindPowerB = next24B.length
+    ? next24B.reduce((s, d) => s + (d.windPowerMeteo || 0), 0) / next24B.length
+    : null;
+  const avgSolarPowerB = next24B.length
+    ? next24B.reduce((s, d) => s + (d.solarPowerMeteo || 0), 0) / next24B.length
+    : null;
+  const estDailyKWhB = avgWindPowerB != null && avgSolarPowerB != null
+    ? (avgWindPowerB + avgSolarPowerB) * 24
+    : null;
+
+  const comparisonData = useMemo(() => {
+    if (!compareMode || !pointB || meteoDataB.length === 0) return [];
+    const len = Math.max(meteoData.length, meteoDataB.length);
+    const out = [];
+    for (let i = 0; i < len; i++) {
+      const a = meteoData[i], b = meteoDataB[i];
+      out.push({
+        time: a?.time ?? b?.time,
+        totalPowerA: a ? (a.windPowerMeteo || 0) + (a.solarPowerMeteo || 0) : null,
+        totalPowerB: b ? (b.windPowerMeteo || 0) + (b.solarPowerMeteo || 0) : null,
+      });
+    }
+    return out;
+  }, [compareMode, pointB, meteoData, meteoDataB]);
+
   return (
     <div className="app">
 
@@ -440,7 +494,25 @@ function App() {
         </div>
         {selectedLat && (
           <div className="selected-info">
-            📍 {selectedLat}°N, {selectedLon}°E
+            📍 A: {selectedLat}°N, {selectedLon}°E
+          </div>
+        )}
+        <div className="control-group">
+          <label>&nbsp;</label>
+          <button
+            type="button"
+            className={`compare-btn ${compareMode ? 'active' : ''}`}
+            onClick={() => {
+              setCompareMode(c => !c);
+              if (compareMode) setPointB(null);
+            }}
+          >
+            🆚 {compareMode ? 'Karşılaştırmayı Kapat' : 'Karşılaştır'}
+          </button>
+        </div>
+        {compareMode && (
+          <div className="selected-info point-b">
+            📍 B: {pointB ? `${pointB.lat}°N, ${pointB.lon}°E` : 'haritada ikinci bir nokta seçin'}
           </div>
         )}
         {meteoData.length > 0 && (
@@ -490,8 +562,21 @@ function App() {
                 </Popup>
               </Marker>
             )}
+            {compareMode && pointB && (
+              <Marker position={[parseFloat(pointB.lat), parseFloat(pointB.lon)]} icon={pointBIcon}>
+                <Popup>
+                  📍 B: {pointB.lat}°N, {pointB.lon}°E<br />
+                  {avgWindPowerB != null && <>💨 ~{avgWindPowerB.toFixed(0)} kW rüzgar<br /></>}
+                  {avgSolarPowerB != null && <>☀️ ~{avgSolarPowerB.toFixed(1)} kW güneş</>}
+                </Popup>
+              </Marker>
+            )}
           </MapContainer>
-          <p className="map-hint">🖱️ Haritada bir noktaya tıklayın ya da yukarıdan şehir arayın</p>
+          <p className="map-hint">
+            {compareMode
+              ? '🖱️ A için bir kez, B için ikinci kez haritaya tıklayın'
+              : '🖱️ Haritada bir noktaya tıklayın ya da yukarıdan şehir arayın'}
+          </p>
         </div>
 
         {loading && (
@@ -546,6 +631,48 @@ function App() {
             <p className="power-disclaimer">
               Referans sistem: {TURBINE.ratedPowerKW / 1000} MW rüzgar türbini ({TURBINE.hubHeight} m göbek yüksekliği) + {PV.capacityKW} kWp çatı tipi güneş paneli. Karbon tasarrufu, Türkiye şebeke elektriği için yaklaşık ~{GRID_EMISSION_FACTOR} gCO₂/kWh gösterge değeriyle hesaplanmıştır. Gerçek bir santral verisi değildir, örnek/gösterge amaçlıdır.
             </p>
+
+            {compareMode && pointB && (
+              <div className="compare-section">
+                <h3>🆚 A/B Karşılaştırması</h3>
+                {loadingB ? (
+                  <SkeletonChart />
+                ) : (
+                  <>
+                    <div className="compare-grid">
+                      <div className="compare-col">
+                        <span className="compare-label point-a-label">📍 A — {selectedLat}°N, {selectedLon}°E</span>
+                        <span className="compare-stat">💨 {avgWindPower != null ? avgWindPower.toFixed(0) : '–'} kW rüzgar</span>
+                        <span className="compare-stat">☀️ {avgSolarPower != null ? avgSolarPower.toFixed(1) : '–'} kW güneş</span>
+                        <span className="compare-stat">🔋 {estDailyKWh != null ? estDailyKWh.toFixed(0) : '–'} kWh/gün</span>
+                      </div>
+                      <div className="compare-col">
+                        <span className="compare-label point-b-label">📍 B — {pointB.lat}°N, {pointB.lon}°E</span>
+                        <span className="compare-stat">💨 {avgWindPowerB != null ? avgWindPowerB.toFixed(0) : '–'} kW rüzgar</span>
+                        <span className="compare-stat">☀️ {avgSolarPowerB != null ? avgSolarPowerB.toFixed(1) : '–'} kW güneş</span>
+                        <span className="compare-stat">🔋 {estDailyKWhB != null ? estDailyKWhB.toFixed(0) : '–'} kWh/gün</span>
+                      </div>
+                    </div>
+                    {comparisonData.length > 0 && (
+                      <div className="chart-box">
+                        <h3>⚡ Toplam Güç Üretimi Karşılaştırması (kW)</h3>
+                        <ResponsiveContainer width="100%" height={240}>
+                          <LineChart data={comparisonData}>
+                            <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
+                            <XAxis dataKey="time" tick={{ fontSize: 11, fill: chartTheme.tick }} />
+                            <YAxis tick={{ fontSize: 11, fill: chartTheme.tick }} />
+                            <Tooltip contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '8px', fontSize: '0.85rem' }} />
+                            <Legend />
+                            <Line type="monotone" dataKey="totalPowerA" stroke="#3b82f6" name="A noktası" dot={false} strokeWidth={2} />
+                            <Line type="monotone" dataKey="totalPowerB" stroke="#ef4444" name="B noktası" dot={false} strokeWidth={2} />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
 
             {bestDays.length > 0 && (
               <div className="best-days">

@@ -328,6 +328,109 @@ body {
   color: #fdba74;
 }
 
+.compare-btn {
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  color: var(--text);
+  padding: 8px 14px;
+  border-radius: 7px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.compare-btn:hover {
+  border-color: #ef4444;
+}
+
+.compare-btn.active {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: #fff;
+}
+
+.selected-info.point-b {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #dc2626;
+}
+
+[data-theme="dark"] .selected-info.point-b {
+  background: #3a1414;
+  border-color: #7c1d1d;
+  color: #fca5a5;
+}
+
+.point-b-marker {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #ef4444;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.compare-section {
+  margin-top: 20px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 20px;
+}
+
+.compare-section h3 {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 14px;
+}
+
+.compare-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.compare-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--input-bg);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.compare-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin-bottom: 4px;
+  font-family: 'DM Mono', monospace;
+}
+
+.point-a-label { color: #3b82f6; }
+.point-b-label { color: #ef4444; }
+
+.compare-stat {
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+@media (max-width: 600px) {
+  .compare-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .csv-btn {
   background: var(--input-bg);
   border: 1px solid var(--input-border);
@@ -659,6 +762,12 @@ body {
 .scroll-table-wrap {
   max-height: 420px;
   overflow-y: auto;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.scroll-table-wrap .top-locations-table {
+  min-width: 480px;
 }
 
 .scroll-table-wrap .top-locations-table thead th {
