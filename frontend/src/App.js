@@ -187,8 +187,12 @@ function App() {
   const [selectedLon, setSelectedLon] = useState(null);
   const [flyTarget, setFlyTarget] = useState(null);
   const [region, setRegion] = useState('turkey');
-  const [enabledModels, setEnabledModels] = useState(() => Object.fromEntries(MODEL_KEYS.map(k => [k, true])));
+  // GRAP+FOUR en uzun süredir arşivde olan/en güvenilir iki model — varsayılan
+  // olarak açık. PANG+AURO yeni eklendi, grafik kalabalaşmasın diye kapalı
+  // başlıyor; isteyen tek tıkla açabiliyor.
+  const [enabledModels, setEnabledModels] = useState({ GRAP: true, FOUR: true, PANG: false, AURO: false });
   const toggleModel = (code) => setEnabledModels(prev => ({ ...prev, [code]: !prev[code] }));
+  const setAllModels = (value) => setEnabledModels(Object.fromEntries(MODEL_KEYS.map(k => [k, value])));
   const [meteoData, setMeteoData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showMeteo, setShowMeteo] = useState(true);
@@ -199,6 +203,7 @@ function App() {
 
   const [heatmap, setHeatmap] = useState([]);
   const [heatmapLoading, setHeatmapLoading] = useState(true);
+  const [heatmapModel, setHeatmapModel] = useState('GRAP');
 
   const [compareMode, setCompareMode] = useState(false);
   const [pointB, setPointB] = useState(null);
@@ -324,13 +329,13 @@ function App() {
     return () => { cancelled = true; };
   }, [compareMode, pointB, fetchPointData]);
 
-  // Türkiye geneli rüzgar potansiyeli ısı haritası — mevcut GraphCast verisinden
-  // nokta başına ortalama rüzgar gücü hesaplanır (tek seferlik, sayfa açılışında).
+  // Türkiye geneli rüzgar potansiyeli ısı haritası — seçilen modelin verisinden
+  // nokta başına ortalama rüzgar gücü hesaplanır. Model değişince yeniden çekilir.
   useEffect(() => {
     (async () => {
       setHeatmapLoading(true);
       try {
-        const res = await axios.get(`${API}/forecast`, { params: { model: 'GRAP', region: 'turkey', limit: 2000 } });
+        const res = await axios.get(`${API}/forecast`, { params: { model: heatmapModel, region: 'turkey', limit: 2000 } });
         const rows = res.data.data || [];
         const byCell = new Map();
         for (const d of rows) {
@@ -351,7 +356,7 @@ function App() {
       }
       setHeatmapLoading(false);
     })();
-  }, []);
+  }, [heatmapModel]);
 
   // Her santral için en yakın ısı haritası grid hücresindeki rüzgar hızından
   // genel referans türbin eğrisiyle bir kapasite faktörü çıkarıp, santralin
@@ -552,6 +557,8 @@ function App() {
                 {MODELS[code].label}
               </label>
             ))}
+            <button type="button" className="model-quick-btn" onClick={() => setAllModels(true)}>Tümü</button>
+            <button type="button" className="model-quick-btn" onClick={() => setAllModels(false)}>Temizle</button>
           </div>
         </div>
         <div className="control-group">
@@ -885,8 +892,16 @@ function App() {
         )}
 
         <div className="heatmap-section">
-          <h2>🗺️ Türkiye Rüzgar Potansiyeli Haritası</h2>
-          <p className="section-note">GraphCast modelinin elindeki tüm Türkiye grid noktalarının ortalama rüzgar gücüne göre renklendirilmesi. Kısa vadeli model verisinin ortalamasıdır, uzun dönemli bir rüzgar kaynağı etüdü değildir.</p>
+          <div className="heatmap-header">
+            <h2>🗺️ Türkiye Rüzgar Potansiyeli Haritası</h2>
+            <div className="control-group heatmap-model-picker">
+              <label>Harita Modeli</label>
+              <select value={heatmapModel} onChange={e => setHeatmapModel(e.target.value)}>
+                {MODEL_KEYS.map(code => <option key={code} value={code}>{MODELS[code].label}</option>)}
+              </select>
+            </div>
+          </div>
+          <p className="section-note">{MODELS[heatmapModel].label} modelinin elindeki tüm Türkiye grid noktalarının ortalama rüzgar gücüne göre renklendirilmesi. Kısa vadeli model verisinin ortalamasıdır, uzun dönemli bir rüzgar kaynağı etüdü değildir.</p>
           {heatmapLoading ? (
             <SkeletonChart />
           ) : heatmap.length === 0 ? (

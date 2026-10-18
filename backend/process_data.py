@@ -2,9 +2,11 @@ import boto3
 from botocore import UNSIGNED
 from botocore.config import Config
 import xarray as xr
+import numpy as np
 import tempfile
 import os
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from supabase import create_client
 
@@ -23,6 +25,8 @@ MODELS = {
 
 REGION = {"lat": (36, 42), "lon": (26, 45)}
 VARIABLES = ["u10", "v10", "t2", "msl"]
+BATCH_SIZE = 5000
+MAX_PARALLEL_INSERTS = 6
 
 s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
 
@@ -41,36 +45,60 @@ def get_all_keys(model_prefix):
             return keys
     return []
 
+def _send_batch(batch):
+    supabase.table("forecasts").insert(batch).execute()
+    return len(batch)
+
 def save_to_supabase(ds, lat_name, lon_name, model_name):
     lat_vals = ds[lat_name].values
     lat_slice = slice(REGION["lat"][1], REGION["lat"][0]) if lat_vals[0] > lat_vals[-1] else slice(REGION["lat"][0], REGION["lat"][1])
 
     ds_tr = ds.sel({lat_name: lat_slice, lon_name: slice(*REGION["lon"])})
+    # Eski kod her (zaman, enlem, boylam) noktası için ayrı bir xarray .sel()
+    # çağrısı yapıyordu (~40 bin kez/dosya) — bu asıl darboğazdı, ağ değil.
+    # Tek seferde boyut sırasını sabitleyip numpy dizisi olarak çekmek,
+    # .sel() çağrısı başına gelen Python/xarray overhead'ini ortadan kaldırır.
+    ds_tr = ds_tr.transpose("time", lat_name, lon_name)
+
+    times = ds_tr["time"].values
+    lats = ds_tr[lat_name].values
+    lons = ds_tr[lon_name].values
+
+    arrays = {}
+    for var in VARIABLES:
+        arrays[var] = ds_tr[var].values if var in ds_tr else None
 
     records = []
-    for t in ds_tr["time"].values:
-        for lat in ds_tr[lat_name].values:
-            for lon in ds_tr[lon_name].values:
-                p = ds_tr.sel({lat_name: lat, lon_name: lon, "time": t})
+    batches = []
+    for ti, t in enumerate(times):
+        ts_str = str(t)
+        slices = {var: (arr[ti] if arr is not None else None) for var, arr in arrays.items()}
+        for li, lat in enumerate(lats):
+            lat_f = float(lat)
+            for lo, lon in enumerate(lons):
                 records.append({
                     "model": model_name,
                     "region": "turkey",
-                    "timestamp": str(t),
-                    "lat": float(lat),
+                    "timestamp": ts_str,
+                    "lat": lat_f,
                     "lon": float(lon),
-                    "u10": float(p["u10"].values) if "u10" in p else None,
-                    "v10": float(p["v10"].values) if "v10" in p else None,
-                    "t2": float(p["t2"].values) if "t2" in p else None,
-                    "msl": float(p["msl"].values) if "msl" in p else None,
+                    "u10": float(slices["u10"][li, lo]) if slices["u10"] is not None else None,
+                    "v10": float(slices["v10"][li, lo]) if slices["v10"] is not None else None,
+                    "t2": float(slices["t2"][li, lo]) if slices["t2"] is not None else None,
+                    "msl": float(slices["msl"][li, lo]) if slices["msl"] is not None else None,
                 })
-                if len(records) >= 1000:
-                    supabase.table("forecasts").insert(records).execute()
-                    print(f"    {len(records)} kayıt gönderildi...")
+                if len(records) >= BATCH_SIZE:
+                    batches.append(records)
                     records = []
 
     if records:
-        supabase.table("forecasts").insert(records).execute()
-        print(f"    {len(records)} kayıt gönderildi.")
+        batches.append(records)
+
+    total = 0
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_INSERTS) as executor:
+        for n in executor.map(_send_batch, batches):
+            total += n
+    print(f"    {total} kayıt gönderildi ({len(batches)} batch, paralel).")
 
     ds_tr.close()
 

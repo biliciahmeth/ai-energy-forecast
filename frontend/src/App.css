@@ -312,6 +312,22 @@ body {
   cursor: pointer;
 }
 
+.model-quick-btn {
+  background: transparent;
+  border: 1px dashed var(--input-border);
+  color: var(--text-faint);
+  border-radius: 20px;
+  padding: 6px 12px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.model-quick-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .selected-info {
   background: #fff7ed;
   border: 1px solid #fed7aa;
@@ -749,6 +765,29 @@ body {
   letter-spacing: 0.05em;
   color: var(--text);
   margin-bottom: 6px;
+}
+
+.heatmap-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.heatmap-header h2 {
+  margin-bottom: 0;
+}
+
+.heatmap-model-picker select {
+  background: var(--input-bg);
+  color: var(--text);
+  border: 1px solid var(--input-border);
+  padding: 6px 12px;
+  border-radius: 7px;
+  font-size: 0.85rem;
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
 }
 
 .section-note {
