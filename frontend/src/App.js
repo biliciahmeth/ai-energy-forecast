@@ -491,7 +491,7 @@ function App() {
             <h1>AI Energy Forecast</h1>
           </div>
           <div className="header-right">
-            <span className="header-sub">NOAA MLWP · GraphCast · FourCastNet</span>
+            <span className="header-sub">NOAA MLWP · GraphCast · FourCastNet · Pangu-Weather · Aurora</span>
             <button className="theme-toggle" onClick={() => setTheme(dark ? 'light' : 'dark')} title="Tema değiştir">
               {dark ? '☀️' : '🌙'}
             </button>
@@ -508,7 +508,7 @@ function App() {
 
       <div className="stats-bar">
         <div className="stat-item">
-          <span className="stat-value">2</span>
+          <span className="stat-value">4</span>
           <span className="stat-label">AI Model</span>
         </div>
         <div className="stat-item">
@@ -978,7 +978,7 @@ function App() {
             <span className="footer-dot">·</span>
             <span>NOAA MLWP Open Data</span>
             <span className="footer-dot">·</span>
-            <span>GraphCast · FourCastNet</span>
+            <span>GraphCast · FourCastNet · Pangu-Weather · Aurora</span>
           </div>
         </div>
       </footer>
