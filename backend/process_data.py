@@ -49,6 +49,20 @@ def _send_batch(batch):
     supabase.table("forecasts").insert(batch).execute()
     return len(batch)
 
+def delete_model_data(model_name, chunk_size=2000):
+    # Tek seferde "tüm model" veya "tüm tablo" silmek, satır sayısı arttıkça
+    # (4 model ile ~600 bin+ satır) Supabase'in statement timeout'una takılıyordu.
+    # ID'leri küçük gruplar halinde çekip silmek her sorguyu hızlı tutar.
+    total_deleted = 0
+    while True:
+        res = supabase.table("forecasts").select("id").eq("model", model_name).limit(chunk_size).execute()
+        ids = [row["id"] for row in res.data]
+        if not ids:
+            break
+        supabase.table("forecasts").delete().in_("id", ids).execute()
+        total_deleted += len(ids)
+    return total_deleted
+
 def save_to_supabase(ds, lat_name, lon_name, model_name):
     lat_vals = ds[lat_name].values
     lat_slice = slice(REGION["lat"][1], REGION["lat"][0]) if lat_vals[0] > lat_vals[-1] else slice(REGION["lat"][0], REGION["lat"][1])
@@ -103,10 +117,6 @@ def save_to_supabase(ds, lat_name, lon_name, model_name):
     ds_tr.close()
 
 if __name__ == "__main__":
-    print("Eski veriler siliniyor...")
-    supabase.table("forecasts").delete().neq("id", 0).execute()
-    print("✓ Silindi.\n")
-
     for model_name, model_prefix in MODELS.items():
         print(f"{'='*50}")
         print(f"Model: {model_name}")
@@ -115,6 +125,10 @@ if __name__ == "__main__":
         if not keys:
             print("✗ Veri bulunamadı.")
             continue
+
+        print(f"  {model_name} için eski veriler siliniyor...")
+        deleted = delete_model_data(model_name)
+        print(f"  ✓ {deleted} eski kayıt silindi.")
 
         for key in keys:
             print(f"\n  Dosya: {key.split('/')[-1]}")
