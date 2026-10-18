@@ -21,12 +21,21 @@ const PV = { capacityKW: 5, performanceRatio: 0.8 }; // 5 kWp çatı tipi kurulu
 const GRID_EMISSION_FACTOR = 442; // gCO2/kWh
 
 const MODELS = {
-  GRAP: { label: 'GraphCast', color: '#f97316' },
-  FOUR: { label: 'FourCastNet', color: '#a855f7' },
-  PANG: { label: 'Pangu-Weather', color: '#10b981' },
-  AURO: { label: 'Aurora', color: '#06b6d4' },
+  GRAP: { label: 'GraphCast', color: '#f97316', info: "Google DeepMind'ın geliştirdiği AI hava tahmin modeli (Science, 2023)" },
+  FOUR: { label: 'FourCastNet', color: '#a855f7', info: "NVIDIA'nın AI hava tahmin modeli (FourCastNet v1, 2022)" },
+  PANG: { label: 'Pangu-Weather', color: '#10b981', info: "Huawei'nin AI hava tahmin modeli (Nature, 2023)" },
+  AURO: { label: 'Aurora', color: '#06b6d4', info: "Microsoft'un AI hava tahmin modeli" },
 };
 const MODEL_KEYS = Object.keys(MODELS);
+
+const QUICK_CITIES = [
+  { name: 'İstanbul', lat: 41.01, lon: 28.95 },
+  { name: 'Ankara', lat: 39.93, lon: 32.86 },
+  { name: 'İzmir', lat: 38.42, lon: 27.14 },
+  { name: 'Antalya', lat: 36.90, lon: 30.70 },
+  { name: 'Bursa', lat: 40.18, lon: 29.06 },
+  { name: 'Trabzon', lat: 41.00, lon: 39.72 },
+];
 
 function pearson(xs, ys) {
   const n = xs.length;
@@ -196,6 +205,8 @@ function App() {
   const [meteoData, setMeteoData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showMeteo, setShowMeteo] = useState(true);
+  const [slowLoading, setSlowLoading] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -219,6 +230,60 @@ function App() {
     }
     setSearchResults([]);
   };
+
+  // Sayfa açılışında URL'den konum/bölge/model durumunu geri yükle (paylaşılan
+  // bir link açıldığında aynı noktaya/ayarlara düşsün diye).
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const lat = params.get('lat');
+      const lon = params.get('lon');
+      const r = params.get('region');
+      const models = params.get('models');
+      if (lat && lon) {
+        setSelectedLat(lat);
+        setSelectedLon(lon);
+        setFlyTarget([parseFloat(lat), parseFloat(lon)]);
+      }
+      if (r) setRegion(r);
+      if (models) {
+        const enabledList = models.split(',');
+        setEnabledModels(Object.fromEntries(MODEL_KEYS.map(k => [k, enabledList.includes(k)])));
+      }
+    } catch { /* ignore malformed URL */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Mevcut durumu (konum/bölge/modeller) URL'e yansıt — kopyalanan link aynı
+  // görünümü açabilsin. Geri/ileri geçmişini kirletmemek için replaceState.
+  useEffect(() => {
+    if (!selectedLat || !selectedLon) return;
+    try {
+      const params = new URLSearchParams();
+      params.set('lat', selectedLat);
+      params.set('lon', selectedLon);
+      params.set('region', region);
+      const enabledList = MODEL_KEYS.filter(k => enabledModels[k]);
+      if (enabledList.length) params.set('models', enabledList.join(','));
+      window.history.replaceState(null, '', `?${params.toString()}`);
+    } catch { /* ignore */ }
+  }, [selectedLat, selectedLon, region, enabledModels]);
+
+  const copyShareLink = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch { /* clipboard unavailable, ignore */ }
+  };
+
+  // Loading çok uzarsa (Render ücretsiz plan boştaysa uyanması ~50sn sürebilir)
+  // kullanıcıya sebebini söyle, aksi halde "donmuş" gibi görünür.
+  useEffect(() => {
+    if (!loading) { setSlowLoading(false); return undefined; }
+    const timer = setTimeout(() => setSlowLoading(true), 5000);
+    return () => clearTimeout(timer);
+  }, [loading]);
 
   const runSearch = async (e) => {
     e.preventDefault();
@@ -547,12 +612,25 @@ function App() {
         )}
       </form>
 
+      <div className="quick-cities">
+        {QUICK_CITIES.map(c => (
+          <button
+            key={c.name}
+            type="button"
+            className="city-chip"
+            onClick={() => { handleLocationSelect(c.lat, c.lon); setFlyTarget([c.lat, c.lon]); }}
+          >
+            {c.name}
+          </button>
+        ))}
+      </div>
+
       <div className="controls">
         <div className="control-group">
           <label>Modeller</label>
           <div className="model-checkboxes">
             {MODEL_KEYS.map(code => (
-              <label className="chip" key={code} style={{ '--chip-color': MODELS[code].color }}>
+              <label className="chip" key={code} style={{ '--chip-color': MODELS[code].color }} title={MODELS[code].info}>
                 <input type="checkbox" checked={enabledModels[code]} onChange={() => toggleModel(code)} />
                 {MODELS[code].label}
               </label>
@@ -610,6 +688,11 @@ function App() {
             ⬇️ CSV indir
           </button>
         )}
+        {selectedLat && (
+          <button type="button" className="csv-btn" onClick={copyShareLink}>
+            {linkCopied ? '✓ Kopyalandı' : '🔗 Linki Kopyala'}
+          </button>
+        )}
       </div>
 
       {!anyAiAvailable && selectedLat && !loading && (
@@ -659,6 +742,11 @@ function App() {
 
         {loading && (
           <>
+            {slowLoading && (
+              <div className="info-banner">
+                ⏳ Backend uyandırılıyor olabilir — ücretsiz sunucu boşta kalınca uykuya geçiyor, ilk istek 50 saniyeye kadar sürebilir. Birazdan gelecek.
+              </div>
+            )}
             <div className="power-summary">
               <SkeletonCard /><SkeletonCard /><SkeletonCard /><SkeletonCard />
             </div>

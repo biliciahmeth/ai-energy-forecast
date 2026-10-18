@@ -243,6 +243,31 @@ body {
   background: var(--input-bg);
 }
 
+/* ── QUICK CITIES ── */
+.quick-cities {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.city-chip {
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  color: var(--text-muted);
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.city-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* ── CONTROLS ── */
 .controls {
   display: flex;
