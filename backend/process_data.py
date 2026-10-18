@@ -16,7 +16,9 @@ supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 BUCKET = "noaa-oar-mlwp-data"
 MODELS = {
     "GRAP": "GRAP_v100_GFS",
-    "FOUR": "FOUR_v100_GFS"
+    "FOUR": "FOUR_v100_GFS",
+    "PANG": "PANG_v100_GFS",
+    "AURO": "AURO_v100_GFS",
 }
 
 REGION = {"lat": (36, 42), "lon": (26, 45)}

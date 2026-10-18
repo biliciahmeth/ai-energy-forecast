@@ -6,7 +6,7 @@ import os
 
 # Ayarlar
 BUCKET = "noaa-oar-mlwp-data"
-MODELS = ["GRAP", "FOUR"]
+MODELS = ["GRAP", "FOUR", "PANG", "AURO"]
 BASE_DIR = "data"
 
 # S3 bağlantısı (anonim)

@@ -69,7 +69,7 @@ async def get_openmeteo(
 
 @app.get("/models")
 def get_models():
-    return {"models": ["GRAP", "FOUR"]}
+    return {"models": ["GRAP", "FOUR", "PANG", "AURO"]}
 
 @app.get("/regions")
 def get_regions():

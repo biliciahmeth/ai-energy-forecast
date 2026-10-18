@@ -20,7 +20,27 @@ const PV = { capacityKW: 5, performanceRatio: 0.8 }; // 5 kWp çatı tipi kurulu
 // Kaynaktan kaynağa değişir (~380-470 gCO2/kWh); kesin bir resmi rakam değil, karşılaştırma içindir.
 const GRID_EMISSION_FACTOR = 442; // gCO2/kWh
 
-const MODELS = { GRAP: { label: 'GraphCast', color: '#f97316' }, FOUR: { label: 'FourCastNet', color: '#a855f7' } };
+const MODELS = {
+  GRAP: { label: 'GraphCast', color: '#f97316' },
+  FOUR: { label: 'FourCastNet', color: '#a855f7' },
+  PANG: { label: 'Pangu-Weather', color: '#10b981' },
+  AURO: { label: 'Aurora', color: '#06b6d4' },
+};
+const MODEL_KEYS = Object.keys(MODELS);
+
+function pearson(xs, ys) {
+  const n = xs.length;
+  if (n < 3) return null;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx2 = 0, dy2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - mx, dy = ys[i] - my;
+    num += dx * dy; dx2 += dx * dx; dy2 += dy * dy;
+  }
+  const denom = Math.sqrt(dx2 * dy2);
+  return denom === 0 ? null : num / denom;
+}
 
 const pinIcon = new L.Icon({
   iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
@@ -85,7 +105,12 @@ function buildAiSeries(rows, selLat, selLon) {
 
 function downloadCSV(rows, filename) {
   if (!rows.length) return;
-  const cols = ['time', 'windSpeedMeteo', 'windSpeedGRAP', 'windSpeedFOUR', 't2Meteo', 'mslMeteo', 'irradiance', 'windPowerMeteo', 'solarPowerMeteo'];
+  const cols = [
+    'time', 'windSpeedMeteo',
+    ...MODEL_KEYS.map(code => `windSpeed${code}`),
+    'ensembleMean', 'ensembleStd',
+    't2Meteo', 'mslMeteo', 'irradiance', 'windPowerMeteo', 'solarPowerMeteo',
+  ];
   const header = cols.join(',');
   const lines = rows.map(r => cols.map(c => (r[c] ?? '')).join(','));
   const csv = [header, ...lines].join('\n');
@@ -162,8 +187,8 @@ function App() {
   const [selectedLon, setSelectedLon] = useState(null);
   const [flyTarget, setFlyTarget] = useState(null);
   const [region, setRegion] = useState('turkey');
-  const [showGRAP, setShowGRAP] = useState(true);
-  const [showFOUR, setShowFOUR] = useState(true);
+  const [enabledModels, setEnabledModels] = useState(() => Object.fromEntries(MODEL_KEYS.map(k => [k, true])));
+  const toggleModel = (code) => setEnabledModels(prev => ({ ...prev, [code]: !prev[code] }));
   const [meteoData, setMeteoData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showMeteo, setShowMeteo] = useState(true);
@@ -214,9 +239,7 @@ function App() {
 
   const fetchPointData = useCallback(async (lat, lon) => {
     const selLat = parseFloat(lat), selLon = parseFloat(lon);
-    const [grapRes, fourRes, meteoRes] = await Promise.all([
-      axios.get(`${API}/forecast`, { params: { model: 'GRAP', region, lat, lon } }).catch(() => ({ data: { data: [] } })),
-      axios.get(`${API}/forecast`, { params: { model: 'FOUR', region, lat, lon } }).catch(() => ({ data: { data: [] } })),
+    const [meteoRes, ...modelResList] = await Promise.all([
       axios.get('https://api.open-meteo.com/v1/forecast', {
         params: {
           latitude: lat,
@@ -226,11 +249,16 @@ function App() {
           timezone: 'auto',
           windspeed_unit: 'ms',
         }
-      })
+      }),
+      ...MODEL_KEYS.map(code =>
+        axios.get(`${API}/forecast`, { params: { model: code, region, lat, lon } }).catch(() => ({ data: { data: [] } }))
+      ),
     ]);
 
-    const grapSeries = buildAiSeries(grapRes.data.data || [], selLat, selLon);
-    const fourSeries = buildAiSeries(fourRes.data.data || [], selLat, selLon);
+    const seriesByModel = {};
+    MODEL_KEYS.forEach((code, i) => {
+      seriesByModel[code] = buildAiSeries(modelResList[i].data.data || [], selLat, selLon);
+    });
 
     const hourly = meteoRes.data.hourly;
     return hourly.time
@@ -240,9 +268,7 @@ function App() {
         const tsMs = new Date(ts).getTime();
         const windSpeedMeteo = parseFloat(hourly.windspeed_10m[idx]?.toFixed(2));
         const irradiance = hourly.shortwave_radiation[idx] ?? 0;
-        const grapMatch = matchByTime(tsMs, grapSeries);
-        const fourMatch = matchByTime(tsMs, fourSeries);
-        return {
+        const row = {
           tsMs,
           time: new Date(ts).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric', hour: '2-digit' }),
           dateKey: new Date(ts).toLocaleDateString('tr-TR', { month: 'short', day: 'numeric' }),
@@ -252,13 +278,27 @@ function App() {
           irradiance: round(irradiance, 0),
           windPowerMeteo: round(windPowerKW(windSpeedMeteo), 0),
           solarPowerMeteo: round(solarPowerKW(irradiance), 1),
-          windSpeedGRAP: grapMatch ? grapMatch.windSpeed : null,
-          t2GRAP: grapMatch ? grapMatch.t2 : null,
-          mslGRAP: grapMatch ? grapMatch.msl : null,
-          windSpeedFOUR: fourMatch ? fourMatch.windSpeed : null,
-          t2FOUR: fourMatch ? fourMatch.t2 : null,
-          mslFOUR: fourMatch ? fourMatch.msl : null,
         };
+        const speeds = [];
+        MODEL_KEYS.forEach(code => {
+          const m = matchByTime(tsMs, seriesByModel[code]);
+          row[`windSpeed${code}`] = m ? m.windSpeed : null;
+          row[`t2${code}`] = m ? m.t2 : null;
+          row[`msl${code}`] = m ? m.msl : null;
+          if (m) speeds.push(m.windSpeed);
+        });
+        row.ensembleN = speeds.length;
+        if (speeds.length >= 1) {
+          const mean = speeds.reduce((a, b) => a + b, 0) / speeds.length;
+          row.ensembleMean = round(mean, 2);
+          row.ensembleStd = speeds.length >= 2
+            ? round(Math.sqrt(speeds.reduce((s, v) => s + (v - mean) ** 2, 0) / speeds.length), 2)
+            : null;
+        } else {
+          row.ensembleMean = null;
+          row.ensembleStd = null;
+        }
+        return row;
       });
   }, [region]);
 
@@ -339,9 +379,42 @@ function App() {
     return heatmap.map(c => [c.lat, c.lon, Math.max(0.05, c.avgPowerKW / maxPower)]);
   }, [heatmap]);
 
-  const aiAvailableGRAP = useMemo(() => meteoData.some(d => d.windSpeedGRAP != null), [meteoData]);
-  const aiAvailableFOUR = useMemo(() => meteoData.some(d => d.windSpeedFOUR != null), [meteoData]);
-  const anyAiAvailable = aiAvailableGRAP || aiAvailableFOUR;
+  const aiAvailableByModel = useMemo(() => {
+    const out = {};
+    MODEL_KEYS.forEach(code => { out[code] = meteoData.some(d => d[`windSpeed${code}`] != null); });
+    return out;
+  }, [meteoData]);
+  const anyAiAvailable = MODEL_KEYS.some(code => aiAvailableByModel[code]);
+  const availableModelCount = MODEL_KEYS.filter(code => aiAvailableByModel[code]).length;
+
+  // Ensemble tutarlılığı: modellerin birbirine ne kadar yakın tahmin verdiği
+  // (düşük CV = modeller hemfikir, yüksek CV = modeller arası belirsizlik yüksek)
+  const ensembleStats = useMemo(() => {
+    const withEnsemble = meteoData.filter(d => d.ensembleN >= 2 && d.ensembleMean > 0);
+    if (!withEnsemble.length) return null;
+    const avgCV = withEnsemble.reduce((s, d) => s + d.ensembleStd / d.ensembleMean, 0) / withEnsemble.length;
+    let label, color;
+    if (avgCV < 0.15) { label = 'Yüksek Tutarlılık'; color = '#16a34a'; }
+    else if (avgCV < 0.30) { label = 'Orta Tutarlılık'; color = '#eab308'; }
+    else { label = 'Düşük Tutarlılık'; color = '#ef4444'; }
+    return { avgCV, label, color, n: withEnsemble.length };
+  }, [meteoData]);
+
+  // Modeller arası ikili korelasyon (Pearson r), ortak zaman noktaları üzerinden
+  const correlationMatrix = useMemo(() => {
+    const matrix = {};
+    for (const a of MODEL_KEYS) {
+      matrix[a] = {};
+      for (const b of MODEL_KEYS) {
+        if (a === b) { matrix[a][b] = 1; continue; }
+        const pairs = meteoData
+          .map(d => [d[`windSpeed${a}`], d[`windSpeed${b}`]])
+          .filter(([x, y]) => x != null && y != null);
+        matrix[a][b] = pairs.length >= 3 ? pearson(pairs.map(p => p[0]), pairs.map(p => p[1])) : null;
+      }
+    }
+    return matrix;
+  }, [meteoData]);
 
   const regionCenters = {
     turkey: [39, 35],
@@ -473,14 +546,12 @@ function App() {
         <div className="control-group">
           <label>Modeller</label>
           <div className="model-checkboxes">
-            <label className="chip" style={{ '--chip-color': MODELS.GRAP.color }}>
-              <input type="checkbox" checked={showGRAP} onChange={e => setShowGRAP(e.target.checked)} />
-              GraphCast
-            </label>
-            <label className="chip" style={{ '--chip-color': MODELS.FOUR.color }}>
-              <input type="checkbox" checked={showFOUR} onChange={e => setShowFOUR(e.target.checked)} />
-              FourCastNet
-            </label>
+            {MODEL_KEYS.map(code => (
+              <label className="chip" key={code} style={{ '--chip-color': MODELS[code].color }}>
+                <input type="checkbox" checked={enabledModels[code]} onChange={() => toggleModel(code)} />
+                {MODELS[code].label}
+              </label>
+            ))}
           </div>
         </div>
         <div className="control-group">
@@ -716,12 +787,52 @@ function App() {
                     <YAxis tick={{ fontSize: 11, fill: chartTheme.tick }} />
                     <Tooltip contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '8px', fontSize: '0.85rem' }} />
                     <Legend />
-                    {showGRAP && aiAvailableGRAP && <Line type="monotone" dataKey="windSpeedGRAP" stroke={MODELS.GRAP.color} name="GraphCast" dot={false} strokeWidth={2} />}
-                    {showFOUR && aiAvailableFOUR && <Line type="monotone" dataKey="windSpeedFOUR" stroke={MODELS.FOUR.color} name="FourCastNet" dot={false} strokeWidth={2} />}
+                    {MODEL_KEYS.map(code => enabledModels[code] && aiAvailableByModel[code] && (
+                      <Line key={code} type="monotone" dataKey={`windSpeed${code}`} stroke={MODELS[code].color} name={MODELS[code].label} dot={false} strokeWidth={2} />
+                    ))}
+                    {ensembleStats && <Line type="monotone" dataKey="ensembleMean" stroke={dark ? '#e5e7eb' : '#111827'} name="Ensemble Ortalama" dot={false} strokeWidth={2.5} strokeDasharray="2 2" />}
                     {showMeteo && <Line type="monotone" dataKey="windSpeedMeteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={anyAiAvailable ? "5 3" : ""} />}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
+
+              {ensembleStats && (
+                <div className="chart-box">
+                  <h3>🧮 Model Ensemble Tutarlılığı</h3>
+                  <div className="ensemble-badge-row">
+                    <span className="ensemble-badge" style={{ '--badge-color': ensembleStats.color }}>
+                      {ensembleStats.label}
+                    </span>
+                    <span className="ensemble-detail">
+                      Ortalama değişim katsayısı (CV): %{(ensembleStats.avgCV * 100).toFixed(1)} · {availableModelCount} model, {ensembleStats.n} zaman noktası üzerinden
+                    </span>
+                  </div>
+                  <p className="section-note">
+                    CV = modeller arası standart sapma / ortalama rüzgar hızı. Düşük CV, modellerin birbirine yakın tahmin verdiğini (daha güvenilir bir sinyal); yüksek CV ise modeller arasında belirsizlik/anlaşmazlık olduğunu gösterir. Üstteki "Ensemble Ortalama" çizgisi bu {availableModelCount} modelin basit ortalamasıdır.
+                  </p>
+                  <table className="corr-table">
+                    <thead>
+                      <tr>
+                        <th></th>
+                        {MODEL_KEYS.map(code => <th key={code}>{MODELS[code].label}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {MODEL_KEYS.map(a => (
+                        <tr key={a}>
+                          <th>{MODELS[a].label}</th>
+                          {MODEL_KEYS.map(b => {
+                            const r = correlationMatrix[a]?.[b];
+                            const bg = r == null ? 'transparent' : `rgba(16,185,129,${Math.max(0, r) * 0.5})`;
+                            return <td key={b} style={{ background: bg }}>{r == null ? '–' : r.toFixed(2)}</td>;
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="section-note">Modellerin rüzgar hızı tahminleri arasındaki Pearson korelasyon katsayısı (1.0 = birebir aynı yönde hareket, 0 = ilişkisiz). Ortak veri noktası olmayan çiftler "–" gösterilir.</p>
+                </div>
+              )}
 
               <div className="chart-box">
                 <h3>🌤️ Güneş Işınımı (W/m²)</h3>
@@ -745,8 +856,9 @@ function App() {
                     <YAxis tick={{ fontSize: 11, fill: chartTheme.tick }} />
                     <Tooltip contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '8px', fontSize: '0.85rem' }} />
                     <Legend />
-                    {showGRAP && aiAvailableGRAP && <Line type="monotone" dataKey="t2GRAP" stroke={MODELS.GRAP.color} name="GraphCast" dot={false} strokeWidth={2} />}
-                    {showFOUR && aiAvailableFOUR && <Line type="monotone" dataKey="t2FOUR" stroke={MODELS.FOUR.color} name="FourCastNet" dot={false} strokeWidth={2} />}
+                    {MODEL_KEYS.map(code => enabledModels[code] && aiAvailableByModel[code] && (
+                      <Line key={code} type="monotone" dataKey={`t2${code}`} stroke={MODELS[code].color} name={MODELS[code].label} dot={false} strokeWidth={2} />
+                    ))}
                     {showMeteo && <Line type="monotone" dataKey="t2Meteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={anyAiAvailable ? "5 3" : ""} />}
                   </LineChart>
                 </ResponsiveContainer>
@@ -761,8 +873,9 @@ function App() {
                     <YAxis domain={[950, 1050]} tick={{ fontSize: 11, fill: chartTheme.tick }} />
                     <Tooltip contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '8px', fontSize: '0.85rem' }} />
                     <Legend />
-                    {showGRAP && aiAvailableGRAP && <Line type="monotone" dataKey="mslGRAP" stroke={MODELS.GRAP.color} name="GraphCast" dot={false} strokeWidth={2} />}
-                    {showFOUR && aiAvailableFOUR && <Line type="monotone" dataKey="mslFOUR" stroke={MODELS.FOUR.color} name="FourCastNet" dot={false} strokeWidth={2} />}
+                    {MODEL_KEYS.map(code => enabledModels[code] && aiAvailableByModel[code] && (
+                      <Line key={code} type="monotone" dataKey={`msl${code}`} stroke={MODELS[code].color} name={MODELS[code].label} dot={false} strokeWidth={2} />
+                    ))}
                     {showMeteo && <Line type="monotone" dataKey="mslMeteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={anyAiAvailable ? "5 3" : ""} />}
                   </LineChart>
                 </ResponsiveContainer>
