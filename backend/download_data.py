@@ -6,7 +6,13 @@ import os
 
 # Ayarlar
 BUCKET = "noaa-oar-mlwp-data"
-MODELS = ["GRAP", "FOUR", "PANG", "AURO"]
+# FOUR_v100_GFS artık NOAA tarafından güncellenmiyor; FOUR_v200_GFS güncel sürüm.
+MODEL_PREFIXES = {
+    "GRAP": "GRAP_v100_GFS",
+    "FOUR": "FOUR_v200_GFS",
+    "PANG": "PANG_v100_GFS",
+    "AURO": "AURO_v100_GFS",
+}
 BASE_DIR = "data"
 
 # S3 bağlantısı (anonim)
@@ -18,8 +24,8 @@ def download_latest():
     yyyy = today.strftime("%Y")
     mmdd = today.strftime("%m%d")
 
-    for model in MODELS:
-        prefix = f"{model}_v100_GFS/{yyyy}/{mmdd}/"
+    for model, model_prefix in MODEL_PREFIXES.items():
+        prefix = f"{model_prefix}/{yyyy}/{mmdd}/"
         print(f"\n{model} için dosyalar aranıyor: {prefix}")
 
         try:
@@ -28,7 +34,7 @@ def download_latest():
                 print(f"Bugün için veri bulunamadı, dün deneniyor...")
                 yesterday = today - timedelta(days=1)
                 mmdd = yesterday.strftime("%m%d")
-                prefix = f"{model}_v100_GFS/{yyyy}/{mmdd}/"
+                prefix = f"{model_prefix}/{yyyy}/{mmdd}/"
                 response = s3.list_objects_v2(Bucket=BUCKET, Prefix=prefix)
 
             if "Contents" in response:

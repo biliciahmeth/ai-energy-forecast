@@ -5,6 +5,7 @@ import xarray as xr
 import numpy as np
 import tempfile
 import os
+import time
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
@@ -18,7 +19,10 @@ supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 BUCKET = "noaa-oar-mlwp-data"
 MODELS = {
     "GRAP": "GRAP_v100_GFS",
-    "FOUR": "FOUR_v100_GFS",
+    # NOAA, FOUR_v100_GFS'i bir süredir güncellemiyor (bucket'ta son dosya
+    # yok oldu) — FOUR_v200_GFS (FourCastNet v2-small) aktif yayınlanan,
+    # aynı değişkenlere (u10/v10/t2/msl) sahip güncel sürüm.
+    "FOUR": "FOUR_v200_GFS",
     "PANG": "PANG_v100_GFS",
     "AURO": "AURO_v100_GFS",
 }
@@ -45,9 +49,28 @@ def get_all_keys(model_prefix):
             return keys
     return []
 
-def _send_batch(batch):
-    supabase.table("forecasts").insert(batch).execute()
-    return len(batch)
+def _send_batch(batch, max_attempts=3):
+    last_err = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            supabase.table("forecasts").insert(batch).execute()
+            return len(batch)
+        except Exception as e:
+            last_err = e
+            time.sleep(1.5 * attempt)
+    raise last_err
+
+def download_with_retry(key, tmp_path, max_attempts=3):
+    last_err = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            s3.download_file(BUCKET, key, tmp_path)
+            return
+        except Exception as e:
+            last_err = e
+            print(f"    İndirme denemesi {attempt}/{max_attempts} başarısız ({e}), tekrar deneniyor...")
+            time.sleep(3 * attempt)
+    raise last_err
 
 def delete_model_data(model_name, chunk_size=2000):
     # Tek seferde "tüm model" veya "tüm tablo" silmek, satır sayısı arttıkça
@@ -126,9 +149,11 @@ if __name__ == "__main__":
             print("✗ Veri bulunamadı.")
             continue
 
-        print(f"  {model_name} için eski veriler siliniyor...")
-        deleted = delete_model_data(model_name)
-        print(f"  ✓ {deleted} eski kayıt silindi.")
+        # Eski veriyi, yeni veri gerçekten başarıyla indirilip açılana kadar SİLMİYORUZ.
+        # Önceki sırada (hep önce sil) bir ağ kopması tüm dosyaları düşürdüğünde
+        # model tablo boş/yarım kalıyordu (FOUR'daki "veri yok" + GRAP/PANG/AURO'nun
+        # yarım kalması bu yüzdendi). Şimdi: ilk başarılı dosyadan hemen önce sil.
+        deleted_old = False
 
         for key in keys:
             print(f"\n  Dosya: {key.split('/')[-1]}")
@@ -136,13 +161,20 @@ if __name__ == "__main__":
             try:
                 with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as tmp:
                     tmp_path = tmp.name
-                s3.download_file(BUCKET, key, tmp_path)
+                download_with_retry(key, tmp_path)
                 ds = xr.open_dataset(tmp_path, engine="netcdf4")
                 available = [v for v in VARIABLES if v in ds.data_vars]
                 ds = ds[available]
                 lat_name = "latitude" if "latitude" in ds.coords else "lat"
                 lon_name = "longitude" if "longitude" in ds.coords else "lon"
                 print(f"  Zaman adımları: {len(ds['time'].values)} | Boyut: {ds.nbytes/1e6:.1f} MB")
+
+                if not deleted_old:
+                    print(f"  {model_name} için eski veriler siliniyor...")
+                    deleted = delete_model_data(model_name)
+                    print(f"  ✓ {deleted} eski kayıt silindi.")
+                    deleted_old = True
+
                 save_to_supabase(ds, lat_name, lon_name, model_name)
                 ds.close()
             except Exception as e:
