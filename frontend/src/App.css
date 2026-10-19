@@ -982,3 +982,15 @@ body {
   color: #3b82f6;
   font-weight: 500;
 }
+
+.radar-toggle {
+  background: var(--card-bg);
+  padding: 8px 14px 14px;
+  margin-top: -1px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.radar-toggle span {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}

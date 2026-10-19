@@ -154,16 +154,28 @@ function HeatLayer({ points, dark }) {
   const map = useMap();
   useEffect(() => {
     if (!points.length) return undefined;
-    const layer = L.heatLayer(points, {
-      radius: 22,
-      blur: 25,
-      maxZoom: 8,
-      max: 1,
-      minOpacity: 0.25,
-      gradient: dark
-        ? { 0.2: '#1d4ed8', 0.45: '#16a34a', 0.7: '#eab308', 1: '#ef4444' }
-        : { 0.2: '#3b82f6', 0.45: '#22c55e', 0.7: '#eab308', 1: '#dc2626' },
-    }).addTo(map);
+    // Konteyner henüz boyutlanmamışsa (ör. sekme arka plandayken mount olduysa)
+    // leaflet.heat'in canvas'ı 0 genişlikle çizmeye çalışıp hiç yakalanmayan bir
+    // hata fırlatıyor — bu da Error Boundary olmadığı için tüm sayfayı
+    // beyaz ekrana düşürüyor. Boyut hazır değilse katmanı hiç eklemiyoruz.
+    const size = map.getSize();
+    if (!size || size.x === 0 || size.y === 0) return undefined;
+    let layer;
+    try {
+      layer = L.heatLayer(points, {
+        radius: 22,
+        blur: 25,
+        maxZoom: 8,
+        max: 1,
+        minOpacity: 0.25,
+        gradient: dark
+          ? { 0.2: '#1d4ed8', 0.45: '#16a34a', 0.7: '#eab308', 1: '#ef4444' }
+          : { 0.2: '#3b82f6', 0.45: '#22c55e', 0.7: '#eab308', 1: '#dc2626' },
+      }).addTo(map);
+    } catch (e) {
+      console.error('Isı haritası katmanı eklenemedi:', e);
+      return undefined;
+    }
     return () => { map.removeLayer(layer); };
   }, [map, points, dark]);
   return null;
@@ -215,6 +227,22 @@ function App() {
   const [heatmap, setHeatmap] = useState([]);
   const [heatmapLoading, setHeatmapLoading] = useState(true);
   const [heatmapModel, setHeatmapModel] = useState('GRAP');
+
+  const [showRadar, setShowRadar] = useState(false);
+  const [radarFrame, setRadarFrame] = useState(null);
+
+  // RainViewer'ın ücretsiz, anahtarsız API'si — sadece görsel bir katman,
+  // hiçbir hesaplamaya (ışınım/güç tahminine) dahil edilmiyor.
+  useEffect(() => {
+    if (!showRadar || radarFrame) return;
+    axios.get('https://api.rainviewer.com/public/weather-maps.json')
+      .then(res => {
+        const frames = res.data?.radar?.past || [];
+        const latest = frames[frames.length - 1];
+        if (latest) setRadarFrame(latest.path);
+      })
+      .catch(() => {});
+  }, [showRadar, radarFrame]);
 
   const [compareMode, setCompareMode] = useState(false);
   const [pointB, setPointB] = useState(null);
@@ -712,6 +740,14 @@ function App() {
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               attribution='© OpenStreetMap'
             />
+            {showRadar && radarFrame && (
+              <TileLayer
+                url={`https://tilecache.rainviewer.com${radarFrame}/256/{z}/{x}/{y}/2/1_1.png`}
+                attribution='© RainViewer'
+                opacity={0.55}
+                zIndex={10}
+              />
+            )}
             <LocationPicker onSelect={handleLocationSelect} />
             <FlyTo target={flyTarget} />
             {selectedLat && selectedLon && (
@@ -738,6 +774,14 @@ function App() {
               ? '🖱️ A için bir kez, B için ikinci kez haritaya tıklayın'
               : '🖱️ Haritada bir noktaya tıklayın ya da yukarıdan şehir arayın'}
           </p>
+          <label className="toggle-label radar-toggle">
+            <input
+              type="checkbox"
+              checked={showRadar}
+              onChange={e => setShowRadar(e.target.checked)}
+            />
+            <span>🌧️ Canlı yağış radarı (RainViewer, görsel amaçlı — tahminlere dahil değil)</span>
+          </label>
         </div>
 
         {loading && (
