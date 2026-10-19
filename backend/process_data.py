@@ -5,6 +5,7 @@ import xarray as xr
 import numpy as np
 import tempfile
 import os
+import re
 import time
 import threading
 from datetime import datetime, timedelta
@@ -49,6 +50,26 @@ VARIABLES = ["u10", "v10", "t2", "msl"]
 BATCH_SIZE = 5000
 MAX_PARALLEL_INSERTS = 4
 
+# ERA5 (reanalysis) karşılaştırma özelliğinin temeli: her gün, tüm Türkiye
+# grid'i yerine sadece bu temsili noktalar için tahminleri issued_at (model
+# çalıştığı an) etiketiyle arşivliyoruz. Birkaç hafta sonra bu noktalardaki
+# geçmiş tahminleri ERA5/Open-Meteo historical API ile karşılaştırıp "hangi
+# model ne kadar isabetli" diye ayrı bir sekme kurulabilir. Tüm grid yerine
+# ~10 nokta seçmek, tabloyu (günde ~3-4 bin satır) yönetilebilir tutar.
+VALIDATION_POINTS = [
+    ("Istanbul", 41.01, 28.95),
+    ("Ankara", 39.93, 32.86),
+    ("Izmir", 38.42, 27.14),
+    ("Antalya", 36.90, 30.70),
+    ("Bursa", 40.18, 29.06),
+    ("Trabzon", 41.00, 39.72),
+    ("Canakkale", 40.15, 26.41),
+    ("Osmaniye", 37.17, 36.61),
+    ("Edirne", 41.68, 26.56),
+    ("Mersin", 36.80, 34.63),
+]
+ARCHIVE_RETENTION_DAYS = 90
+
 s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
 
 def get_all_keys(model_prefix):
@@ -78,6 +99,38 @@ def _send_batch(batch, max_attempts=4):
             _reset_thread_client()
             time.sleep(1.5 * attempt)
     raise last_err
+
+def _send_archive_batch(records, max_attempts=4):
+    if not records:
+        return 0
+    last_err = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            client = _get_thread_client()
+            client.table("forecast_archive").insert(records).execute()
+            return len(records)
+        except Exception as e:
+            last_err = e
+            _reset_thread_client()
+            time.sleep(1.5 * attempt)
+    print(f"    Arşiv kaydı başarısız: {last_err}")
+    return 0
+
+def parse_issued_at(key):
+    # Dosya adı: MODEL_vNNN_III_YYYYMMDDHH_f000_f240_06.nc
+    m = re.search(r'_(\d{10})_f\d{3}_f\d{3}', key)
+    if not m:
+        return None
+    s = m.group(1)
+    return f"{s[0:4]}-{s[4:6]}-{s[6:8]}T{s[8:10]}:00:00+00:00"
+
+def prune_archive(days=ARCHIVE_RETENTION_DAYS):
+    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    try:
+        client = _get_thread_client()
+        client.table("forecast_archive").delete().lt("issued_at", cutoff).execute()
+    except Exception as e:
+        print(f"  Arşiv temizleme hatası: {e}")
 
 def download_with_retry(key, tmp_path, max_attempts=3):
     last_err = None
@@ -116,7 +169,7 @@ def delete_model_data(model_name, chunk_size=2000):
         total_deleted += len(ids)
     return total_deleted
 
-def save_to_supabase(ds, lat_name, lon_name, model_name):
+def save_to_supabase(ds, lat_name, lon_name, model_name, issued_at=None):
     lat_vals = ds[lat_name].values
     lat_slice = slice(REGION["lat"][1], REGION["lat"][0]) if lat_vals[0] > lat_vals[-1] else slice(REGION["lat"][0], REGION["lat"][1])
 
@@ -167,6 +220,32 @@ def save_to_supabase(ds, lat_name, lon_name, model_name):
             total += n
     print(f"    {total} kayıt gönderildi ({len(batches)} batch, paralel).")
 
+    # Reanalysis karşılaştırması için: temsili noktaların tüm zaman serisini
+    # arşive kaydet. Veriler zaten bellekte (arrays) — ekstra indirme/işlem yok.
+    if issued_at:
+        issued_dt = np.datetime64(issued_at[:-6])  # "+00:00" kısmını at, naive UTC
+        archive_records = []
+        for name, plat, plon in VALIDATION_POINTS:
+            li = int(np.argmin(np.abs(lats - plat)))
+            lo = int(np.argmin(np.abs(lons - plon)))
+            for ti, t in enumerate(times):
+                lead_hours = int((np.datetime64(t) - issued_dt) / np.timedelta64(1, 'h'))
+                archive_records.append({
+                    "model": model_name,
+                    "point_name": name,
+                    "lat": float(lats[li]),
+                    "lon": float(lons[lo]),
+                    "issued_at": issued_at,
+                    "valid_at": str(t),
+                    "lead_hours": lead_hours,
+                    "u10": float(arrays["u10"][ti, li, lo]) if arrays["u10"] is not None else None,
+                    "v10": float(arrays["v10"][ti, li, lo]) if arrays["v10"] is not None else None,
+                    "t2": float(arrays["t2"][ti, li, lo]) if arrays["t2"] is not None else None,
+                    "msl": float(arrays["msl"][ti, li, lo]) if arrays["msl"] is not None else None,
+                })
+        archived = _send_archive_batch(archive_records)
+        print(f"    {archived} arşiv kaydı gönderildi (doğrulama noktaları).")
+
     ds_tr.close()
 
 if __name__ == "__main__":
@@ -205,7 +284,7 @@ if __name__ == "__main__":
                     print(f"  ✓ {deleted} eski kayıt silindi.")
                     deleted_old = True
 
-                save_to_supabase(ds, lat_name, lon_name, model_name)
+                save_to_supabase(ds, lat_name, lon_name, model_name, issued_at=parse_issued_at(key))
                 ds.close()
             except Exception as e:
                 print(f"  Hata: {e}")
@@ -213,5 +292,8 @@ if __name__ == "__main__":
                 if tmp_path:
                     try: os.unlink(tmp_path)
                     except: pass
+
+    print("\nArşivde 90 günden eski kayıtlar temizleniyor...")
+    prune_archive()
 
     print("\n✓ Tamamlandı!")
