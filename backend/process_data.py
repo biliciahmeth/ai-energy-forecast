@@ -6,6 +6,7 @@ import numpy as np
 import tempfile
 import os
 import time
+import threading
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
@@ -15,6 +16,22 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+# "Server disconnected" hataları, tek bir global client'ın httpx bağlantı
+# havuzundaki bayatlamış bir TCP bağlantısından kaynaklanıyordu — aynı bozuk
+# bağlantıyla tekrar denemek işe yaramıyordu. Her thread kendi client'ını
+# tutar; bir hata sonrası o thread'in client'ı atılır, bir dahaki deneme
+# taze bir bağlantıyla kurulur.
+_thread_local = threading.local()
+
+def _get_thread_client():
+    if not hasattr(_thread_local, "client"):
+        _thread_local.client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    return _thread_local.client
+
+def _reset_thread_client():
+    if hasattr(_thread_local, "client"):
+        del _thread_local.client
 
 BUCKET = "noaa-oar-mlwp-data"
 MODELS = {
@@ -30,7 +47,7 @@ MODELS = {
 REGION = {"lat": (36, 42), "lon": (26, 45)}
 VARIABLES = ["u10", "v10", "t2", "msl"]
 BATCH_SIZE = 5000
-MAX_PARALLEL_INSERTS = 6
+MAX_PARALLEL_INSERTS = 4
 
 s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
 
@@ -49,14 +66,16 @@ def get_all_keys(model_prefix):
             return keys
     return []
 
-def _send_batch(batch, max_attempts=3):
+def _send_batch(batch, max_attempts=4):
     last_err = None
     for attempt in range(1, max_attempts + 1):
         try:
-            supabase.table("forecasts").insert(batch).execute()
+            client = _get_thread_client()
+            client.table("forecasts").insert(batch).execute()
             return len(batch)
         except Exception as e:
             last_err = e
+            _reset_thread_client()
             time.sleep(1.5 * attempt)
     raise last_err
 
@@ -72,17 +91,28 @@ def download_with_retry(key, tmp_path, max_attempts=3):
             time.sleep(3 * attempt)
     raise last_err
 
+def _with_retry(fn, max_attempts=4):
+    last_err = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn(_get_thread_client())
+        except Exception as e:
+            last_err = e
+            _reset_thread_client()
+            time.sleep(1.5 * attempt)
+    raise last_err
+
 def delete_model_data(model_name, chunk_size=2000):
     # Tek seferde "tüm model" veya "tüm tablo" silmek, satır sayısı arttıkça
     # (4 model ile ~600 bin+ satır) Supabase'in statement timeout'una takılıyordu.
     # ID'leri küçük gruplar halinde çekip silmek her sorguyu hızlı tutar.
     total_deleted = 0
     while True:
-        res = supabase.table("forecasts").select("id").eq("model", model_name).limit(chunk_size).execute()
+        res = _with_retry(lambda c: c.table("forecasts").select("id").eq("model", model_name).limit(chunk_size).execute())
         ids = [row["id"] for row in res.data]
         if not ids:
             break
-        supabase.table("forecasts").delete().in_("id", ids).execute()
+        _with_retry(lambda c: c.table("forecasts").delete().in_("id", ids).execute())
         total_deleted += len(ids)
     return total_deleted
 
