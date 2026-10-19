@@ -231,8 +231,8 @@ function App() {
   const [showRadar, setShowRadar] = useState(false);
   const [radarFrame, setRadarFrame] = useState(null);
 
-  // RainViewer'ın ücretsiz, anahtarsız API'si — sadece görsel bir katman,
-  // hiçbir hesaplamaya (ışınım/güç tahminine) dahil edilmiyor.
+  // RainViewer'ın ücretsiz, anahtarsız API'si — SADECE YAĞIŞ (radar), bulutu
+  // göstermez. Sadece görsel bir katman, hiçbir hesaplamaya dahil edilmiyor.
   useEffect(() => {
     if (!showRadar || radarFrame) return;
     axios.get('https://api.rainviewer.com/public/weather-maps.json')
@@ -243,6 +243,17 @@ function App() {
       })
       .catch(() => {});
   }, [showRadar, radarFrame]);
+
+  const [showSatellite, setShowSatellite] = useState(false);
+  // NASA GIBS: gerçek uydu görüntüsü (bulutlar dahil), ücretsiz ve anahtarsız.
+  // Günde ~1 kez güncelleniyor (gerçek zamanlı değil) ve sadece gündüz çekimi
+  // olduğu için gece saatlerinde o günün görüntüsü karanlık/eksik gelebilir.
+  // Yine sadece görsel — hiçbir hesaplamaya dahil edilmiyor.
+  const satelliteDate = useMemo(() => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - 1); // dünün görüntüsü, işlenme gecikmesi yüzünden daha güvenilir
+    return d.toISOString().slice(0, 10);
+  }, []);
 
   const [compareMode, setCompareMode] = useState(false);
   const [pointB, setPointB] = useState(null);
@@ -740,6 +751,15 @@ function App() {
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               attribution='© OpenStreetMap'
             />
+            {showSatellite && (
+              <TileLayer
+                url={`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${satelliteDate}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`}
+                attribution='© NASA GIBS / VIIRS'
+                opacity={0.85}
+                zIndex={5}
+                maxNativeZoom={9}
+              />
+            )}
             {showRadar && radarFrame && (
               <TileLayer
                 url={`https://tilecache.rainviewer.com${radarFrame}/256/{z}/{x}/{y}/2/1_1.png`}
@@ -774,14 +794,24 @@ function App() {
               ? '🖱️ A için bir kez, B için ikinci kez haritaya tıklayın'
               : '🖱️ Haritada bir noktaya tıklayın ya da yukarıdan şehir arayın'}
           </p>
-          <label className="toggle-label radar-toggle">
-            <input
-              type="checkbox"
-              checked={showRadar}
-              onChange={e => setShowRadar(e.target.checked)}
-            />
-            <span>🌧️ Canlı yağış radarı (RainViewer, görsel amaçlı — tahminlere dahil değil)</span>
-          </label>
+          <div className="map-overlay-toggles">
+            <label className="toggle-label radar-toggle">
+              <input
+                type="checkbox"
+                checked={showRadar}
+                onChange={e => setShowRadar(e.target.checked)}
+              />
+              <span>🌧️ Yağış radarı (sadece yağmur/kar — bulutu göstermez, görsel amaçlı)</span>
+            </label>
+            <label className="toggle-label radar-toggle">
+              <input
+                type="checkbox"
+                checked={showSatellite}
+                onChange={e => setShowSatellite(e.target.checked)}
+              />
+              <span>🛰️ Uydu görüntüsü — gerçek bulutlar ({satelliteDate}, günlük güncellenir, görsel amaçlı)</span>
+            </label>
+          </div>
         </div>
 
         {loading && (

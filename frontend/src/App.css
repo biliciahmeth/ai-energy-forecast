@@ -983,14 +983,28 @@ body {
   font-weight: 500;
 }
 
-.radar-toggle {
+.map-overlay-toggles {
   background: var(--card-bg);
-  padding: 8px 14px 14px;
+  padding: 10px 14px 14px;
   margin-top: -1px;
   border-top: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.radar-toggle {
+  padding: 0;
 }
 
 .radar-toggle span {
-  font-size: 0.78rem;
-  color: var(--text-muted);
+  font-size: 0.82rem;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.radar-toggle input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
 }
