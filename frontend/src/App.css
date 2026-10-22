@@ -1,31 +1,37 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
 :root {
-  --bg: #f4f5f7;
+  --bg: #f3f4f3;
   --card-bg: #ffffff;
-  --text: #111827;
-  --text-muted: #6b7280;
-  --text-faint: #9ca3af;
-  --border: #e5e7eb;
-  --border-soft: #f3f4f6;
-  --input-bg: #f9fafb;
-  --input-border: #d1d5db;
-  --accent: #f97316;
-  --accent-dark: #ea580c;
+  --text: #16211d;
+  --text-muted: #5b6b63;
+  --text-faint: #8a978f;
+  --border: #dde3df;
+  --border-soft: #eef1ef;
+  --input-bg: #f6f8f6;
+  --input-border: #cdd6d0;
+  --accent: #0d7d6e;
+  --accent-dark: #095c51;
+  --hero-bg: #0e221e;
+  --wind-color: #2563eb;
+  --solar-color: #c2770c;
 }
 
 [data-theme="dark"] {
-  --bg: #0b0f18;
-  --card-bg: #151b28;
-  --text: #e8eaed;
-  --text-muted: #9aa5b8;
-  --text-faint: #6b7686;
-  --border: #262f41;
-  --border-soft: #1c2433;
-  --input-bg: #1c2433;
-  --input-border: #2d3648;
-  --accent: #f97316;
-  --accent-dark: #fb923c;
+  --bg: #0a1210;
+  --card-bg: #121c19;
+  --text: #e6ece9;
+  --text-muted: #94a39c;
+  --text-faint: #647069;
+  --border: #223029;
+  --border-soft: #182521;
+  --input-bg: #182521;
+  --input-border: #2b3a33;
+  --accent: #14b8a2;
+  --accent-dark: #5eead4;
+  --hero-bg: #081713;
+  --wind-color: #60a5fa;
+  --solar-color: #e0a233;
 }
 
 * {
@@ -35,7 +41,7 @@
 }
 
 body {
-  font-family: 'DM Sans', sans-serif;
+  font-family: 'IBM Plex Sans', sans-serif;
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
@@ -109,7 +115,7 @@ body {
 
 /* ── HERO ── */
 .hero {
-  background: #111827;
+  background: var(--hero-bg);
   margin: 0 -24px;
   padding: 52px 24px 44px;
 }
@@ -138,18 +144,20 @@ body {
 /* ── STATS BAR ── */
 .stats-bar {
   display: flex;
-  background: var(--card-bg);
-  border-bottom: 2px solid var(--border);
+  gap: 28px;
+  background: transparent;
+  border-bottom: 1px solid var(--border-soft);
   margin: 0 -24px 28px;
+  padding: 10px 24px 14px;
 }
 
 .stat-item {
-  flex: 1;
-  padding: 16px 24px;
-  border-right: 1px solid var(--border);
+  flex: none;
+  padding: 0;
+  border-right: none;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: baseline;
+  gap: 6px;
 }
 
 .stat-item:last-child {
@@ -157,14 +165,14 @@ body {
 }
 
 .stat-value {
-  font-size: 1.3rem;
-  font-weight: 700;
+  font-size: 0.95rem;
+  font-weight: 600;
   color: var(--text);
-  font-family: 'DM Mono', monospace;
+  font-family: 'IBM Plex Mono', monospace;
 }
 
 .stat-label {
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   color: var(--text-faint);
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -187,7 +195,7 @@ body {
   padding: 10px 14px;
   border-radius: 7px;
   font-size: 0.9rem;
-  font-family: 'DM Sans', sans-serif;
+  font-family: 'IBM Plex Sans', sans-serif;
   outline: none;
   transition: border-color 0.2s;
 }
@@ -302,7 +310,7 @@ body {
   padding: 8px 14px;
   border-radius: 7px;
   font-size: 0.9rem;
-  font-family: 'DM Sans', sans-serif;
+  font-family: 'IBM Plex Sans', sans-serif;
   cursor: pointer;
   outline: none;
   transition: border-color 0.2s;
@@ -314,6 +322,7 @@ body {
 
 .model-checkboxes {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -354,19 +363,19 @@ body {
 }
 
 .selected-info {
-  background: #fff7ed;
-  border: 1px solid #fed7aa;
+  background: var(--border-soft);
+  border: 1px solid var(--border);
   padding: 8px 14px;
   border-radius: 7px;
   font-size: 0.85rem;
-  color: #ea580c;
-  font-family: 'DM Mono', monospace;
+  color: var(--accent-dark);
+  font-family: 'IBM Plex Mono', monospace;
 }
 
 [data-theme="dark"] .selected-info {
-  background: #3a2410;
-  border-color: #7c4a12;
-  color: #fdba74;
+  background: var(--input-bg);
+  border-color: var(--border);
+  color: var(--accent);
 }
 
 .compare-btn {
@@ -455,7 +464,7 @@ body {
   font-size: 0.78rem;
   font-weight: 700;
   margin-bottom: 4px;
-  font-family: 'DM Mono', monospace;
+  font-family: 'IBM Plex Mono', monospace;
 }
 
 .point-a-label { color: #3b82f6; }
@@ -604,7 +613,7 @@ body {
   font-size: 1.25rem;
   font-weight: 700;
   color: var(--text);
-  font-family: 'DM Mono', monospace;
+  font-family: 'IBM Plex Mono', monospace;
 }
 
 .power-value small {
@@ -678,7 +687,7 @@ body {
 .best-day-chip .rank {
   font-weight: 700;
   color: var(--accent);
-  font-family: 'DM Mono', monospace;
+  font-family: 'IBM Plex Mono', monospace;
 }
 
 .best-day-chip .day {
@@ -773,7 +782,7 @@ body {
 
 .corr-table td {
   color: var(--text);
-  font-family: 'DM Mono', monospace;
+  font-family: 'IBM Plex Mono', monospace;
 }
 
 /* ── HEATMAP SECTION ── */
@@ -811,7 +820,7 @@ body {
   padding: 6px 12px;
   border-radius: 7px;
   font-size: 0.85rem;
-  font-family: 'DM Sans', sans-serif;
+  font-family: 'IBM Plex Sans', sans-serif;
   cursor: pointer;
 }
 

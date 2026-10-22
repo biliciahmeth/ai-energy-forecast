@@ -150,6 +150,32 @@ function FlyTo({ target }) {
   return null;
 }
 
+// Leaflet, konteynerinin gerçek boyutunu mount anında (ör. sayfa henüz
+// kaydırılmadan, layout hesaplanmadan) yanlış ölçüyor ve haritayı yanlış
+// zoom/merkeze sabitliyordu — kaydırılınca Türkiye yerine tüm dünya
+// görünüyordu. ResizeObserver ile konteyner gerçek boyutuna ulaştığında
+// (veya sonradan boyut değiştiğinde) invalidateSize() ile düzeltiyoruz.
+function MapSizeFixer() {
+  const map = useMap();
+  useEffect(() => {
+    const container = map.getContainer();
+    const fix = () => map.invalidateSize();
+    const t1 = setTimeout(fix, 150);
+    const t2 = setTimeout(fix, 600);
+    let ro;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(fix);
+      ro.observe(container);
+    }
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      if (ro) ro.disconnect();
+    };
+  }, [map]);
+  return null;
+}
+
 function HeatLayer({ points, dark }) {
   const map = useMap();
   useEffect(() => {
@@ -768,6 +794,7 @@ function App() {
                 zIndex={10}
               />
             )}
+            <MapSizeFixer />
             <LocationPicker onSelect={handleLocationSelect} />
             <FlyTo target={flyTarget} />
             {selectedLat && selectedLon && (
@@ -895,7 +922,7 @@ function App() {
                     </div>
                     {comparisonData.length > 0 && (
                       <div className="chart-box">
-                        <h3>⚡ Toplam Güç Üretimi Karşılaştırması (kW)</h3>
+                        <h3>Toplam Güç Üretimi Karşılaştırması (kW)</h3>
                         <ResponsiveContainer width="100%" height={240}>
                           <LineChart data={comparisonData}>
                             <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
@@ -916,7 +943,7 @@ function App() {
 
             {bestDays.length > 0 && (
               <div className="best-days">
-                <h3>🏆 Önümüzdeki 10 Günün En Verimli Günleri</h3>
+                <h3>Önümüzdeki 10 Günün En Verimli Günleri</h3>
                 <div className="best-days-list">
                   {bestDays.map((d, i) => (
                     <div className="best-day-chip" key={d.day}>
@@ -930,10 +957,10 @@ function App() {
             )}
 
             <div className="charts">
-              <h2>📊 Tahmin Grafikleri</h2>
+              <h2>Tahmin Grafikleri</h2>
 
               <div className="chart-box">
-                <h3>⚡ Tahmini Güç Üretimi (kW)</h3>
+                <h3>Tahmini Güç Üretimi (kW)</h3>
                 <ResponsiveContainer width="100%" height={260}>
                   <ComposedChart data={meteoData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
@@ -948,7 +975,7 @@ function App() {
               </div>
 
               <div className="chart-box">
-                <h3>💨 Rüzgar Hızı (m/s)</h3>
+                <h3>Rüzgar Hızı (m/s)</h3>
                 <ResponsiveContainer width="100%" height={250}>
                   <LineChart data={meteoData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
@@ -967,7 +994,7 @@ function App() {
 
               {ensembleStats && (
                 <div className="chart-box">
-                  <h3>🧮 Model Ensemble Tutarlılığı</h3>
+                  <h3>Model Ensemble Tutarlılığı</h3>
                   <div className="ensemble-badge-row">
                     <span className="ensemble-badge" style={{ '--badge-color': ensembleStats.color }}>
                       {ensembleStats.label}
@@ -1004,7 +1031,7 @@ function App() {
               )}
 
               <div className="chart-box">
-                <h3>🌤️ Güneş Işınımı (W/m²)</h3>
+                <h3>Güneş Işınımı (W/m²)</h3>
                 <ResponsiveContainer width="100%" height={220}>
                   <AreaChart data={meteoData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
@@ -1017,7 +1044,7 @@ function App() {
               </div>
 
               <div className="chart-box">
-                <h3>🌡️ Sıcaklık (°C)</h3>
+                <h3>Sıcaklık (°C)</h3>
                 <ResponsiveContainer width="100%" height={250}>
                   <LineChart data={meteoData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
@@ -1055,7 +1082,7 @@ function App() {
 
         <div className="heatmap-section">
           <div className="heatmap-header">
-            <h2>🗺️ Türkiye Rüzgar Potansiyeli Haritası</h2>
+            <h2>Türkiye Rüzgar Potansiyeli Haritası</h2>
             <div className="control-group heatmap-model-picker">
               <label>Harita Modeli</label>
               <select value={heatmapModel} onChange={e => setHeatmapModel(e.target.value)}>
@@ -1073,6 +1100,7 @@ function App() {
               <div className="map-container">
                 <MapContainer center={[39, 35]} zoom={5} style={{ height: '420px', width: '100%' }}>
                   <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='© OpenStreetMap' />
+                  <MapSizeFixer />
                   <HeatLayer points={heatPoints} dark={dark} />
                   {windFarmsWithOutput.map((f, i) => (
                     <CircleMarker
@@ -1096,7 +1124,7 @@ function App() {
               </div>
               <p className="section-note">⚫⚪ Beyaz/siyah noktalar: OpenStreetMap'te kayıtlı {WIND_FARMS.length} gerçek rüzgar santrali. Tahmini anlık üretim, santralin en yakın grid hücresindeki rüzgar hızı ve genel referans türbin eğrisiyle hesaplanır (gerçek türbin modelleri bilinmediğinden yaklaşıktır). OSM tabanlı liste eksiksiz değildir.</p>
               <div className="top-locations">
-                <h3>🏅 En Yüksek Potansiyelli 10 Lokasyon</h3>
+                <h3>En Yüksek Potansiyelli 10 Lokasyon</h3>
                 <table className="top-locations-table">
                   <thead>
                     <tr><th>#</th><th>Konum</th><th>Ort. Rüzgar Hızı</th><th>Ort. Rüzgar Gücü</th></tr>
@@ -1116,7 +1144,7 @@ function App() {
 
               {windFarmsWithOutput.length > 0 && (
                 <div className="top-locations">
-                  <h3>⚙️ Aktif Rüzgar Santralleri — Tahmini Üretim ({windFarmsWithOutput.length} santral)</h3>
+                  <h3>Aktif Rüzgar Santralleri — Tahmini Üretim ({windFarmsWithOutput.length} santral)</h3>
                   <div className="scroll-table-wrap">
                     <table className="top-locations-table">
                       <thead>
