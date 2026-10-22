@@ -961,15 +961,19 @@ function App() {
 
               <div className="chart-box">
                 <h3>Tahmini Güç Üretimi (kW)</h3>
+                <p className="section-note">
+                  Rüzgar ({TURBINE.ratedPowerKW / 1000} MW türbin) ve güneş ({PV.capacityKW} kWp panel) kapasiteleri çok farklı olduğu için ayrı eksenlerde gösterilir — soldaki eksen rüzgar, sağdaki eksen güneş içindir.
+                </p>
                 <ResponsiveContainer width="100%" height={260}>
                   <ComposedChart data={meteoData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
                     <XAxis dataKey="time" tick={{ fontSize: 11, fill: chartTheme.tick }} />
-                    <YAxis tick={{ fontSize: 11, fill: chartTheme.tick }} />
+                    <YAxis yAxisId="wind" tick={{ fontSize: 11, fill: chartTheme.tick }} />
+                    <YAxis yAxisId="solar" orientation="right" tick={{ fontSize: 11, fill: chartTheme.tick }} />
                     <Tooltip contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '8px', fontSize: '0.85rem' }} />
                     <Legend />
-                    <Area type="monotone" dataKey="solarPowerMeteo" stroke="#eab308" fill="#fef08a" fillOpacity={dark ? 0.25 : 1} name="Güneş (kW)" strokeWidth={2} />
-                    <Area type="monotone" dataKey="windPowerMeteo" stroke="#3b82f6" fill="#bfdbfe" fillOpacity={dark ? 0.25 : 1} name="Rüzgar (kW)" strokeWidth={2} />
+                    <Area yAxisId="solar" type="monotone" dataKey="solarPowerMeteo" stroke="#eab308" fill="#fef08a" fillOpacity={dark ? 0.25 : 1} name="Güneş (kW)" strokeWidth={2} />
+                    <Area yAxisId="wind" type="monotone" dataKey="windPowerMeteo" stroke="#3b82f6" fill="#bfdbfe" fillOpacity={dark ? 0.25 : 1} name="Rüzgar (kW)" strokeWidth={2} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
