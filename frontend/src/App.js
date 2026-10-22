@@ -28,6 +28,13 @@ const MODELS = {
 };
 const MODEL_KEYS = Object.keys(MODELS);
 
+// ECMWF IFS: AI modellerin aksine klasik fizik tabanlı (nümerik) hava tahmin
+// modeli — GraphCast/Pangu-Weather/Aurora gibi AI modellerin eğitildiği/kıyaslandığı
+// endüstri standardı referans. Open-Meteo üzerinden ücretsiz çekiliyor, AI model
+// ensemble/korelasyon hesaplarına dahil edilmiyor (o hesap sadece AI modelleri
+// birbiriyle kıyaslıyor) — sadece grafiklerde görsel referans çizgisi olarak gösterilir.
+const IFS = { label: 'ECMWF IFS', color: '#dc2626', info: 'ECMWF\'in operasyonel fizik tabanlı (AI olmayan) nümerik hava tahmin modeli — AI modellerin karşılaştırıldığı referans' };
+
 const QUICK_CITIES = [
   { name: 'İstanbul', lat: 41.01, lon: 28.95 },
   { name: 'Ankara', lat: 39.93, lon: 32.86 },
@@ -117,8 +124,10 @@ function downloadCSV(rows, filename) {
   const cols = [
     'time', 'windSpeedMeteo',
     ...MODEL_KEYS.map(code => `windSpeed${code}`),
+    'windSpeedIFS',
     'ensembleMean', 'ensembleStd',
     't2Meteo', 'mslMeteo', 'irradiance', 'windPowerMeteo', 'solarPowerMeteo',
+    't2IFS', 'mslIFS',
   ];
   const header = cols.join(',');
   const lines = rows.map(r => cols.map(c => (r[c] ?? '')).join(','));
@@ -240,6 +249,7 @@ function App() {
   const [meteoData, setMeteoData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showMeteo, setShowMeteo] = useState(true);
+  const [showIFS, setShowIFS] = useState(true);
   const [slowLoading, setSlowLoading] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
 
@@ -371,7 +381,7 @@ function App() {
 
   const fetchPointData = useCallback(async (lat, lon) => {
     const selLat = parseFloat(lat), selLon = parseFloat(lon);
-    const [meteoRes, ...modelResList] = await Promise.all([
+    const [meteoRes, ifsRes, ...modelResList] = await Promise.all([
       axios.get('https://api.open-meteo.com/v1/forecast', {
         params: {
           latitude: lat,
@@ -382,10 +392,25 @@ function App() {
           windspeed_unit: 'ms',
         }
       }),
+      // Aynı lat/lon/timezone/forecast_days ile çekildiği için saatlik zaman
+      // ızgarası meteoRes ile birebir aynı çıkıyor — ayrı eşleştirme gerekmiyor,
+      // aynı idx ile hizalanabiliyor.
+      axios.get('https://api.open-meteo.com/v1/forecast', {
+        params: {
+          latitude: lat,
+          longitude: lon,
+          hourly: 'temperature_2m,windspeed_10m,pressure_msl',
+          forecast_days: 10,
+          timezone: 'auto',
+          windspeed_unit: 'ms',
+          models: 'ecmwf_ifs025',
+        }
+      }).catch(() => ({ data: { hourly: null } })),
       ...MODEL_KEYS.map(code =>
         axios.get(`${API}/forecast`, { params: { model: code, region, lat, lon } }).catch(() => ({ data: { data: [] } }))
       ),
     ]);
+    const ifsHourly = ifsRes.data.hourly;
 
     const seriesByModel = {};
     MODEL_KEYS.forEach((code, i) => {
@@ -410,6 +435,9 @@ function App() {
           irradiance: round(irradiance, 0),
           windPowerMeteo: round(windPowerKW(windSpeedMeteo), 0),
           solarPowerMeteo: round(solarPowerKW(irradiance), 1),
+          windSpeedIFS: ifsHourly ? parseFloat(ifsHourly.windspeed_10m[idx]?.toFixed(2)) : null,
+          t2IFS: ifsHourly ? parseFloat(ifsHourly.temperature_2m[idx]?.toFixed(1)) : null,
+          mslIFS: ifsHourly ? parseFloat(ifsHourly.pressure_msl[idx]?.toFixed(1)) : null,
         };
         const speeds = [];
         MODEL_KEYS.forEach(code => {
@@ -743,6 +771,14 @@ function App() {
               />
               <span>Meteoroloji tahmini</span>
             </label>
+            <label className="toggle-label" style={{ '--toggle-color': IFS.color }} title={IFS.info}>
+              <input
+                type="checkbox"
+                checked={showIFS}
+                onChange={e => setShowIFS(e.target.checked)}
+              />
+              <span>{IFS.label} (fiziksel model)</span>
+            </label>
           </div>
         )}
         {meteoData.length > 0 && (
@@ -989,6 +1025,7 @@ function App() {
                     ))}
                     {ensembleStats && <Line type="monotone" dataKey="ensembleMean" stroke={dark ? '#e5e7eb' : '#111827'} name="Ensemble Ortalama" dot={false} strokeWidth={2.5} strokeDasharray="2 2" />}
                     {showMeteo && <Line type="monotone" dataKey="windSpeedMeteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={anyAiAvailable ? "5 3" : ""} />}
+                    {showIFS && <Line type="monotone" dataKey="windSpeedIFS" stroke={IFS.color} name={IFS.label} dot={false} strokeWidth={2} />}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -1057,6 +1094,7 @@ function App() {
                       <Line key={code} type="monotone" dataKey={`t2${code}`} stroke={MODELS[code].color} name={MODELS[code].label} dot={false} strokeWidth={2} />
                     ))}
                     {showMeteo && <Line type="monotone" dataKey="t2Meteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={anyAiAvailable ? "5 3" : ""} />}
+                    {showIFS && <Line type="monotone" dataKey="t2IFS" stroke={IFS.color} name={IFS.label} dot={false} strokeWidth={2} />}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -1074,6 +1112,7 @@ function App() {
                       <Line key={code} type="monotone" dataKey={`msl${code}`} stroke={MODELS[code].color} name={MODELS[code].label} dot={false} strokeWidth={2} />
                     ))}
                     {showMeteo && <Line type="monotone" dataKey="mslMeteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={anyAiAvailable ? "5 3" : ""} />}
+                    {showIFS && <Line type="monotone" dataKey="mslIFS" stroke={IFS.color} name={IFS.label} dot={false} strokeWidth={2} />}
                   </LineChart>
                 </ResponsiveContainer>
               </div>

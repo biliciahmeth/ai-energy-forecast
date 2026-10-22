@@ -963,6 +963,8 @@ body {
 .toggle-group {
   display: flex;
   align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
   margin-top: 18px;
 }
 
@@ -977,14 +979,14 @@ body {
 }
 
 .toggle-label input[type="checkbox"] {
-  accent-color: #3b82f6;
+  accent-color: var(--toggle-color, #3b82f6);
   width: 15px;
   height: 15px;
   cursor: pointer;
 }
 
 .toggle-label span {
-  color: #3b82f6;
+  color: var(--toggle-color, #3b82f6);
   font-weight: 500;
 }
 
