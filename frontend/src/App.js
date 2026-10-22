@@ -234,9 +234,6 @@ function App() {
   const [selectedLon, setSelectedLon] = useState(null);
   const [flyTarget, setFlyTarget] = useState(null);
   const [region, setRegion] = useState('turkey');
-  // GRAP+FOUR en uzun süredir arşivde olan/en güvenilir iki model — varsayılan
-  // olarak açık. PANG+AURO yeni eklendi, grafik kalabalaşmasın diye kapalı
-  // başlıyor; isteyen tek tıkla açabiliyor.
   const [enabledModels, setEnabledModels] = useState({ GRAP: true, FOUR: true, PANG: true, AURO: true });
   const toggleModel = (code) => setEnabledModels(prev => ({ ...prev, [code]: !prev[code] }));
   const setAllModels = (value) => setEnabledModels(Object.fromEntries(MODEL_KEYS.map(k => [k, value])));
@@ -762,7 +759,7 @@ function App() {
 
       {!anyAiAvailable && selectedLat && !loading && (
         <div className="info-banner">
-          ℹ️ AI model verisi (GraphCast/FourCastNet) şu an yalnızca <strong>Türkiye</strong> bölgesi için işleniyor. Bu nokta için yalnızca açık meteoroloji tahmini gösteriliyor.
+          ℹ️ AI model verisi şu an yalnızca <strong>Türkiye</strong> bölgesi için işleniyor. Bu nokta için yalnızca açık meteoroloji tahmini gösteriliyor.
         </div>
       )}
 

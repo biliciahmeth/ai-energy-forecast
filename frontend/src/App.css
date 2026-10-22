@@ -13,8 +13,6 @@
   --accent: #0d7d6e;
   --accent-dark: #095c51;
   --hero-bg: #0e221e;
-  --wind-color: #2563eb;
-  --solar-color: #c2770c;
 }
 
 [data-theme="dark"] {
@@ -30,8 +28,6 @@
   --accent: #14b8a2;
   --accent-dark: #5eead4;
   --hero-bg: #081713;
-  --wind-color: #60a5fa;
-  --solar-color: #e0a233;
 }
 
 * {
