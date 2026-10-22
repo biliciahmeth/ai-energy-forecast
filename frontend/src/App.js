@@ -237,7 +237,7 @@ function App() {
   // GRAP+FOUR en uzun süredir arşivde olan/en güvenilir iki model — varsayılan
   // olarak açık. PANG+AURO yeni eklendi, grafik kalabalaşmasın diye kapalı
   // başlıyor; isteyen tek tıkla açabiliyor.
-  const [enabledModels, setEnabledModels] = useState({ GRAP: true, FOUR: true, PANG: false, AURO: false });
+  const [enabledModels, setEnabledModels] = useState({ GRAP: true, FOUR: true, PANG: true, AURO: true });
   const toggleModel = (code) => setEnabledModels(prev => ({ ...prev, [code]: !prev[code] }));
   const setAllModels = (value) => setEnabledModels(Object.fromEntries(MODEL_KEYS.map(k => [k, value])));
   const [meteoData, setMeteoData] = useState([]);
@@ -1065,7 +1065,7 @@ function App() {
               </div>
 
               <div className="chart-box">
-                <h3>🔵 Deniz Seviyesi Basıncı (hPa)</h3>
+                <h3>Deniz Seviyesi Basıncı (hPa)</h3>
                 <ResponsiveContainer width="100%" height={250}>
                   <LineChart data={meteoData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
