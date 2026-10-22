@@ -447,26 +447,12 @@ function App() {
           t2AIFS: aifsHourly ? parseFloat(aifsHourly.temperature_2m[idx]?.toFixed(1)) : null,
           mslAIFS: aifsHourly ? parseFloat(aifsHourly.pressure_msl[idx]?.toFixed(1)) : null,
         };
-        const speeds = [];
         MODEL_KEYS.forEach(code => {
           const m = matchByTime(tsMs, seriesByModel[code]);
           row[`windSpeed${code}`] = m ? m.windSpeed : null;
           row[`t2${code}`] = m ? m.t2 : null;
           row[`msl${code}`] = m ? m.msl : null;
-          if (m) speeds.push(m.windSpeed);
         });
-        if (row.windSpeedAIFS != null) speeds.push(row.windSpeedAIFS);
-        row.ensembleN = speeds.length;
-        if (speeds.length >= 1) {
-          const mean = speeds.reduce((a, b) => a + b, 0) / speeds.length;
-          row.ensembleMean = round(mean, 2);
-          row.ensembleStd = speeds.length >= 2
-            ? round(Math.sqrt(speeds.reduce((s, v) => s + (v - mean) ** 2, 0) / speeds.length), 2)
-            : null;
-        } else {
-          row.ensembleMean = null;
-          row.ensembleStd = null;
-        }
         return row;
       });
   }, [region]);
@@ -554,15 +540,41 @@ function App() {
     return out;
   }, [meteoData]);
   const anyAiAvailable = ALL_MODEL_KEYS.some(code => aiAvailableByModel[code]);
-  const availableModelCount = ALL_MODEL_KEYS.filter(code => aiAvailableByModel[code]).length;
   // Banner mesajı sadece NOAA'nın Türkiye'ye özel 4 modeli için geçerli —
   // AIFS dünya geneli çalıştığı için bu kısıtlamaya dahil değil.
   const anyNoaaModelAvailable = MODEL_KEYS.some(code => aiAvailableByModel[code]);
 
+  // Ensemble/korelasyon hesapları SADECE kullanıcının işaretli bıraktığı
+  // modelleri kullanmalı — aksi halde "Temizle"ye basıp tüm modelleri
+  // kapatan kullanıcı hâlâ "5 model"e dayalı bir ensemble ortalaması/
+  // korelasyon tablosu görür, checkbox'ların etkisi yarım kalır.
+  const enabledModelKeys = useMemo(() => ALL_MODEL_KEYS.filter(k => enabledModels[k]), [enabledModels]);
+  const availableModelCount = enabledModelKeys.filter(code => aiAvailableByModel[code]).length;
+
+  // meteoData'yı, yalnızca işaretli modellerin rüzgar hızlarından yeniden
+  // hesaplanan ensembleMean/ensembleStd/ensembleN ile zenginleştirir —
+  // grafikler ve CSV bu versiyonu kullanır.
+  const chartData = useMemo(() => {
+    return meteoData.map(d => {
+      const speeds = enabledModelKeys
+        .map(code => d[`windSpeed${code}`])
+        .filter(v => v != null);
+      let ensembleMean = null, ensembleStd = null;
+      if (speeds.length >= 1) {
+        const mean = speeds.reduce((a, b) => a + b, 0) / speeds.length;
+        ensembleMean = round(mean, 2);
+        ensembleStd = speeds.length >= 2
+          ? round(Math.sqrt(speeds.reduce((s, v) => s + (v - mean) ** 2, 0) / speeds.length), 2)
+          : null;
+      }
+      return { ...d, ensembleN: speeds.length, ensembleMean, ensembleStd };
+    });
+  }, [meteoData, enabledModelKeys]);
+
   // Ensemble tutarlılığı: modellerin birbirine ne kadar yakın tahmin verdiği
   // (düşük CV = modeller hemfikir, yüksek CV = modeller arası belirsizlik yüksek)
   const ensembleStats = useMemo(() => {
-    const withEnsemble = meteoData.filter(d => d.ensembleN >= 2 && d.ensembleMean > 0);
+    const withEnsemble = chartData.filter(d => d.ensembleN >= 2 && d.ensembleMean > 0);
     if (!withEnsemble.length) return null;
     const avgCV = withEnsemble.reduce((s, d) => s + d.ensembleStd / d.ensembleMean, 0) / withEnsemble.length;
     let label, color;
@@ -570,14 +582,15 @@ function App() {
     else if (avgCV < 0.30) { label = 'Orta Tutarlılık'; color = '#eab308'; }
     else { label = 'Düşük Tutarlılık'; color = '#ef4444'; }
     return { avgCV, label, color, n: withEnsemble.length };
-  }, [meteoData]);
+  }, [chartData]);
 
-  // Modeller arası ikili korelasyon (Pearson r), ortak zaman noktaları üzerinden
+  // Modeller arası ikili korelasyon (Pearson r) — yalnızca işaretli modeller
+  // arasında, ortak zaman noktaları üzerinden
   const correlationMatrix = useMemo(() => {
     const matrix = {};
-    for (const a of ALL_MODEL_KEYS) {
+    for (const a of enabledModelKeys) {
       matrix[a] = {};
-      for (const b of ALL_MODEL_KEYS) {
+      for (const b of enabledModelKeys) {
         if (a === b) { matrix[a][b] = 1; continue; }
         const pairs = meteoData
           .map(d => [d[`windSpeed${a}`], d[`windSpeed${b}`]])
@@ -586,7 +599,7 @@ function App() {
       }
     }
     return matrix;
-  }, [meteoData]);
+  }, [meteoData, enabledModelKeys]);
 
   const regionCenters = {
     turkey: [39, 35],
@@ -786,7 +799,7 @@ function App() {
           </div>
         )}
         {meteoData.length > 0 && (
-          <button type="button" className="csv-btn" onClick={() => downloadCSV(meteoData, `enerji-tahmini-${selectedLat}-${selectedLon}.csv`)}>
+          <button type="button" className="csv-btn" onClick={() => downloadCSV(chartData, `enerji-tahmini-${selectedLat}-${selectedLon}.csv`)}>
             ⬇️ CSV indir
           </button>
         )}
@@ -855,7 +868,9 @@ function App() {
           </MapContainer>
           <p className="map-hint">
             {compareMode
-              ? '🖱️ A için bir kez, B için ikinci kez haritaya tıklayın'
+              ? (selectedLat != null
+                ? '🖱️ Sonraki tıklama B noktasını seçecek'
+                : '🖱️ Önce A noktası için haritaya tıklayın')
               : '🖱️ Haritada bir noktaya tıklayın ya da yukarıdan şehir arayın'}
           </p>
           <div className="map-overlay-toggles">
@@ -913,7 +928,7 @@ function App() {
               <div className="power-card">
                 <span className="power-icon">📈</span>
                 <div>
-                  <span className="power-value">{windCapacityFactor != null ? windCapacityFactor.toFixed(0) : '–'}<small>%</small></span>
+                  <span className="power-value">{windCapacityFactor != null ? windCapacityFactor.toFixed(windCapacityFactor < 1 ? 1 : 0) : '–'}<small>%</small></span>
                   <span className="power-label">Rüzgar Kapasite Faktörü</span>
                 </div>
               </div>
@@ -1002,7 +1017,7 @@ function App() {
                   Rüzgar ({TURBINE.ratedPowerKW / 1000} MW türbin) ve güneş ({PV.capacityKW} kWp panel) kapasiteleri çok farklı olduğu için ayrı eksenlerde gösterilir — soldaki eksen rüzgar, sağdaki eksen güneş içindir.
                 </p>
                 <ResponsiveContainer width="100%" height={260}>
-                  <ComposedChart data={meteoData}>
+                  <ComposedChart data={chartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
                     <XAxis dataKey="time" tick={{ fontSize: 11, fill: chartTheme.tick }} />
                     <YAxis yAxisId="wind" tick={{ fontSize: 11, fill: chartTheme.tick }} />
@@ -1018,7 +1033,7 @@ function App() {
               <div className="chart-box">
                 <h3>Rüzgar Hızı (m/s)</h3>
                 <ResponsiveContainer width="100%" height={250}>
-                  <LineChart data={meteoData}>
+                  <LineChart data={chartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
                     <XAxis dataKey="time" tick={{ fontSize: 11, fill: chartTheme.tick }} />
                     <YAxis tick={{ fontSize: 11, fill: chartTheme.tick }} />
@@ -1052,14 +1067,14 @@ function App() {
                     <thead>
                       <tr>
                         <th></th>
-                        {ALL_MODEL_KEYS.map(code => <th key={code}>{ALL_MODELS[code].label}</th>)}
+                        {enabledModelKeys.map(code => <th key={code}>{ALL_MODELS[code].label}</th>)}
                       </tr>
                     </thead>
                     <tbody>
-                      {ALL_MODEL_KEYS.map(a => (
+                      {enabledModelKeys.map(a => (
                         <tr key={a}>
                           <th>{ALL_MODELS[a].label}</th>
-                          {ALL_MODEL_KEYS.map(b => {
+                          {enabledModelKeys.map(b => {
                             const r = correlationMatrix[a]?.[b];
                             const bg = r == null ? 'transparent' : `rgba(16,185,129,${Math.max(0, r) * 0.5})`;
                             return <td key={b} style={{ background: bg }}>{r == null ? '–' : r.toFixed(2)}</td>;
@@ -1076,7 +1091,7 @@ function App() {
               <div className="chart-box">
                 <h3>Güneş Işınımı (W/m²)</h3>
                 <ResponsiveContainer width="100%" height={220}>
-                  <AreaChart data={meteoData}>
+                  <AreaChart data={chartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
                     <XAxis dataKey="time" tick={{ fontSize: 11, fill: chartTheme.tick }} />
                     <YAxis tick={{ fontSize: 11, fill: chartTheme.tick }} />
@@ -1089,7 +1104,7 @@ function App() {
               <div className="chart-box">
                 <h3>Sıcaklık (°C)</h3>
                 <ResponsiveContainer width="100%" height={250}>
-                  <LineChart data={meteoData}>
+                  <LineChart data={chartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
                     <XAxis dataKey="time" tick={{ fontSize: 11, fill: chartTheme.tick }} />
                     <YAxis tick={{ fontSize: 11, fill: chartTheme.tick }} />
@@ -1106,7 +1121,7 @@ function App() {
               <div className="chart-box">
                 <h3>Deniz Seviyesi Basıncı (hPa)</h3>
                 <ResponsiveContainer width="100%" height={250}>
-                  <LineChart data={meteoData}>
+                  <LineChart data={chartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
                     <XAxis dataKey="time" tick={{ fontSize: 11, fill: chartTheme.tick }} />
                     <YAxis domain={[950, 1050]} tick={{ fontSize: 11, fill: chartTheme.tick }} />
@@ -1133,7 +1148,12 @@ function App() {
               </select>
             </div>
           </div>
-          <p className="section-note">{MODELS[heatmapModel].label} modelinin elindeki tüm Türkiye grid noktalarının ortalama rüzgar gücüne göre renklendirilmesi. Kısa vadeli model verisinin ortalamasıdır, uzun dönemli bir rüzgar kaynağı etüdü değildir.</p>
+          {region !== 'turkey' && selectedLat && (
+            <p className="section-note">
+              ℹ️ Bu bölüm her zaman Türkiye geneli sabit bir harita gösterir — yukarıda seçtiğin nokta ile ilgisi yok.
+            </p>
+          )}
+          <p className="section-note">{MODELS[heatmapModel].label} modelinin elindeki tüm Türkiye grid noktalarının ortalama rüzgar gücüne göre renklendirilmesi. Kısa vadeli model verisinin ortalamasıdır, uzun dönemli bir rüzgar kaynağı etüdü değildir. (ECMWF AIFS burada seçilemiyor — bu harita NOAA'nın Türkiye geneli grid verisine ihtiyaç duyuyor, AIFS ise yalnızca tek nokta için çekiliyor.)</p>
           {heatmapLoading ? (
             <SkeletonChart />
           ) : heatmap.length === 0 ? (
