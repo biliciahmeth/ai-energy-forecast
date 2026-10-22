@@ -817,6 +817,7 @@ function App() {
       )}
 
       <div className="main-content">
+        <div className="map-col">
         <div className="map-container">
           <MapContainer
             center={regionCenters[region]}
@@ -892,7 +893,9 @@ function App() {
             </label>
           </div>
         </div>
+        </div>
 
+        <div className="content-col">
         {loading && (
           <>
             {slowLoading && (
@@ -1137,6 +1140,8 @@ function App() {
             </div>
           </>
         )}
+        </div>
+      </div>
 
         <div className="heatmap-section">
           <div className="heatmap-header">
@@ -1234,7 +1239,6 @@ function App() {
             </>
           )}
         </div>
-      </div>
 
       <footer className="footer">
         <div className="footer-inner">
