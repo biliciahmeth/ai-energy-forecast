@@ -20,6 +20,9 @@ const PV = { capacityKW: 5, performanceRatio: 0.8 }; // 5 kWp çatı tipi kurulu
 // Kaynaktan kaynağa değişir (~380-470 gCO2/kWh); kesin bir resmi rakam değil, karşılaştırma içindir.
 const GRID_EMISSION_FACTOR = 442; // gCO2/kWh
 
+// NOAA MLWP S3 bucket'ından arşivlenen, backend üzerinden gelen 4 model —
+// grid tabanlı, en yakın nokta eşleştirmesiyle (buildAiSeries) işleniyor,
+// şu an yalnızca Türkiye bölgesi için arşivleniyor.
 const MODELS = {
   GRAP: { label: 'GraphCast', color: '#f97316', info: "Google DeepMind'ın geliştirdiği AI hava tahmin modeli (Science, 2023)" },
   FOUR: { label: 'FourCastNet', color: '#a855f7', info: "NVIDIA'nın AI hava tahmin modeli (FourCastNet v1, 2022)" },
@@ -28,12 +31,17 @@ const MODELS = {
 };
 const MODEL_KEYS = Object.keys(MODELS);
 
-// ECMWF IFS: AI modellerin aksine klasik fizik tabanlı (nümerik) hava tahmin
-// modeli — GraphCast/Pangu-Weather/Aurora gibi AI modellerin eğitildiği/kıyaslandığı
-// endüstri standardı referans. Open-Meteo üzerinden ücretsiz çekiliyor, AI model
-// ensemble/korelasyon hesaplarına dahil edilmiyor (o hesap sadece AI modelleri
-// birbiriyle kıyaslıyor) — sadece grafiklerde görsel referans çizgisi olarak gösterilir.
-const IFS = { label: 'ECMWF IFS', color: '#dc2626', info: 'ECMWF\'in operasyonel fizik tabanlı (AI olmayan) nümerik hava tahmin modeli — AI modellerin karşılaştırıldığı referans' };
+// ECMWF AIFS: ECMWF'in kendi yapay zeka hava tahmin modeli (2024'te operasyonel
+// oldu) — GraphCast/FourCastNet/Pangu-Weather/Aurora gibi gerçek bir AI modeli,
+// ama NOAA MLWP'de değil, doğrudan Open-Meteo üzerinden (dünya geneli, saatlik
+// enterpole edilmiş) ücretsiz çekiliyor. Diğer 4 modelden farklı olarak Türkiye
+// dışında da kullanılabiliyor.
+const AIFS_MODEL = { label: 'ECMWF AIFS', color: '#dc2626', info: "ECMWF'in kendi yapay zeka hava tahmin modeli (2024'te operasyonel oldu) — dünya geneli kullanılabilir" };
+
+// Grafikler/checkbox/ensemble gibi görüntüleme amaçlı yerlerde kullanılan,
+// NOAA'nın 4 modeli + AIFS'i birlikte içeren birleşik liste.
+const ALL_MODELS = { ...MODELS, AIFS: AIFS_MODEL };
+const ALL_MODEL_KEYS = [...MODEL_KEYS, 'AIFS'];
 
 const QUICK_CITIES = [
   { name: 'İstanbul', lat: 41.01, lon: 28.95 },
@@ -123,11 +131,11 @@ function downloadCSV(rows, filename) {
   if (!rows.length) return;
   const cols = [
     'time', 'windSpeedMeteo',
-    ...MODEL_KEYS.map(code => `windSpeed${code}`),
-    'windSpeedIFS',
+    ...ALL_MODEL_KEYS.map(code => `windSpeed${code}`),
     'ensembleMean', 'ensembleStd',
     't2Meteo', 'mslMeteo', 'irradiance', 'windPowerMeteo', 'solarPowerMeteo',
-    't2IFS', 'mslIFS',
+    ...ALL_MODEL_KEYS.map(code => `t2${code}`),
+    ...ALL_MODEL_KEYS.map(code => `msl${code}`),
   ];
   const header = cols.join(',');
   const lines = rows.map(r => cols.map(c => (r[c] ?? '')).join(','));
@@ -243,13 +251,12 @@ function App() {
   const [selectedLon, setSelectedLon] = useState(null);
   const [flyTarget, setFlyTarget] = useState(null);
   const [region, setRegion] = useState('turkey');
-  const [enabledModels, setEnabledModels] = useState({ GRAP: true, FOUR: true, PANG: true, AURO: true });
+  const [enabledModels, setEnabledModels] = useState({ GRAP: true, FOUR: true, PANG: true, AURO: true, AIFS: true });
   const toggleModel = (code) => setEnabledModels(prev => ({ ...prev, [code]: !prev[code] }));
-  const setAllModels = (value) => setEnabledModels(Object.fromEntries(MODEL_KEYS.map(k => [k, value])));
+  const setAllModels = (value) => setEnabledModels(Object.fromEntries(ALL_MODEL_KEYS.map(k => [k, value])));
   const [meteoData, setMeteoData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showMeteo, setShowMeteo] = useState(true);
-  const [showIFS, setShowIFS] = useState(true);
   const [slowLoading, setSlowLoading] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
 
@@ -320,7 +327,7 @@ function App() {
       if (r) setRegion(r);
       if (models) {
         const enabledList = models.split(',');
-        setEnabledModels(Object.fromEntries(MODEL_KEYS.map(k => [k, enabledList.includes(k)])));
+        setEnabledModels(Object.fromEntries(ALL_MODEL_KEYS.map(k => [k, enabledList.includes(k)])));
       }
     } catch { /* ignore malformed URL */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -335,7 +342,7 @@ function App() {
       params.set('lat', selectedLat);
       params.set('lon', selectedLon);
       params.set('region', region);
-      const enabledList = MODEL_KEYS.filter(k => enabledModels[k]);
+      const enabledList = ALL_MODEL_KEYS.filter(k => enabledModels[k]);
       if (enabledList.length) params.set('models', enabledList.join(','));
       window.history.replaceState(null, '', `?${params.toString()}`);
     } catch { /* ignore */ }
@@ -381,7 +388,7 @@ function App() {
 
   const fetchPointData = useCallback(async (lat, lon) => {
     const selLat = parseFloat(lat), selLon = parseFloat(lon);
-    const [meteoRes, ifsRes, ...modelResList] = await Promise.all([
+    const [meteoRes, aifsRes, ...modelResList] = await Promise.all([
       axios.get('https://api.open-meteo.com/v1/forecast', {
         params: {
           latitude: lat,
@@ -394,7 +401,8 @@ function App() {
       }),
       // Aynı lat/lon/timezone/forecast_days ile çekildiği için saatlik zaman
       // ızgarası meteoRes ile birebir aynı çıkıyor — ayrı eşleştirme gerekmiyor,
-      // aynı idx ile hizalanabiliyor.
+      // aynı idx ile hizalanabiliyor. AIFS NOAA backend'inden değil, doğrudan
+      // Open-Meteo'dan geliyor (dünya geneli kullanılabilir).
       axios.get('https://api.open-meteo.com/v1/forecast', {
         params: {
           latitude: lat,
@@ -403,14 +411,14 @@ function App() {
           forecast_days: 10,
           timezone: 'auto',
           windspeed_unit: 'ms',
-          models: 'ecmwf_ifs025',
+          models: 'ecmwf_aifs025_single',
         }
       }).catch(() => ({ data: { hourly: null } })),
       ...MODEL_KEYS.map(code =>
         axios.get(`${API}/forecast`, { params: { model: code, region, lat, lon } }).catch(() => ({ data: { data: [] } }))
       ),
     ]);
-    const ifsHourly = ifsRes.data.hourly;
+    const aifsHourly = aifsRes.data.hourly;
 
     const seriesByModel = {};
     MODEL_KEYS.forEach((code, i) => {
@@ -435,9 +443,9 @@ function App() {
           irradiance: round(irradiance, 0),
           windPowerMeteo: round(windPowerKW(windSpeedMeteo), 0),
           solarPowerMeteo: round(solarPowerKW(irradiance), 1),
-          windSpeedIFS: ifsHourly ? parseFloat(ifsHourly.windspeed_10m[idx]?.toFixed(2)) : null,
-          t2IFS: ifsHourly ? parseFloat(ifsHourly.temperature_2m[idx]?.toFixed(1)) : null,
-          mslIFS: ifsHourly ? parseFloat(ifsHourly.pressure_msl[idx]?.toFixed(1)) : null,
+          windSpeedAIFS: aifsHourly ? parseFloat(aifsHourly.windspeed_10m[idx]?.toFixed(2)) : null,
+          t2AIFS: aifsHourly ? parseFloat(aifsHourly.temperature_2m[idx]?.toFixed(1)) : null,
+          mslAIFS: aifsHourly ? parseFloat(aifsHourly.pressure_msl[idx]?.toFixed(1)) : null,
         };
         const speeds = [];
         MODEL_KEYS.forEach(code => {
@@ -447,6 +455,7 @@ function App() {
           row[`msl${code}`] = m ? m.msl : null;
           if (m) speeds.push(m.windSpeed);
         });
+        if (row.windSpeedAIFS != null) speeds.push(row.windSpeedAIFS);
         row.ensembleN = speeds.length;
         if (speeds.length >= 1) {
           const mean = speeds.reduce((a, b) => a + b, 0) / speeds.length;
@@ -541,11 +550,14 @@ function App() {
 
   const aiAvailableByModel = useMemo(() => {
     const out = {};
-    MODEL_KEYS.forEach(code => { out[code] = meteoData.some(d => d[`windSpeed${code}`] != null); });
+    ALL_MODEL_KEYS.forEach(code => { out[code] = meteoData.some(d => d[`windSpeed${code}`] != null); });
     return out;
   }, [meteoData]);
-  const anyAiAvailable = MODEL_KEYS.some(code => aiAvailableByModel[code]);
-  const availableModelCount = MODEL_KEYS.filter(code => aiAvailableByModel[code]).length;
+  const anyAiAvailable = ALL_MODEL_KEYS.some(code => aiAvailableByModel[code]);
+  const availableModelCount = ALL_MODEL_KEYS.filter(code => aiAvailableByModel[code]).length;
+  // Banner mesajı sadece NOAA'nın Türkiye'ye özel 4 modeli için geçerli —
+  // AIFS dünya geneli çalıştığı için bu kısıtlamaya dahil değil.
+  const anyNoaaModelAvailable = MODEL_KEYS.some(code => aiAvailableByModel[code]);
 
   // Ensemble tutarlılığı: modellerin birbirine ne kadar yakın tahmin verdiği
   // (düşük CV = modeller hemfikir, yüksek CV = modeller arası belirsizlik yüksek)
@@ -563,9 +575,9 @@ function App() {
   // Modeller arası ikili korelasyon (Pearson r), ortak zaman noktaları üzerinden
   const correlationMatrix = useMemo(() => {
     const matrix = {};
-    for (const a of MODEL_KEYS) {
+    for (const a of ALL_MODEL_KEYS) {
       matrix[a] = {};
-      for (const b of MODEL_KEYS) {
+      for (const b of ALL_MODEL_KEYS) {
         if (a === b) { matrix[a][b] = 1; continue; }
         const pairs = meteoData
           .map(d => [d[`windSpeed${a}`], d[`windSpeed${b}`]])
@@ -651,7 +663,7 @@ function App() {
             <h1>AI Energy Forecast</h1>
           </div>
           <div className="header-right">
-            <span className="header-sub">NOAA MLWP · GraphCast · FourCastNet · Pangu-Weather · Aurora</span>
+            <span className="header-sub">GraphCast · FourCastNet · Pangu-Weather · Aurora · ECMWF AIFS</span>
             <button className="theme-toggle" onClick={() => setTheme(dark ? 'light' : 'dark')} title="Tema değiştir">
               {dark ? '☀️' : '🌙'}
             </button>
@@ -668,7 +680,7 @@ function App() {
 
       <div className="stats-bar">
         <div className="stat-item">
-          <span className="stat-value">4</span>
+          <span className="stat-value">{ALL_MODEL_KEYS.length}</span>
           <span className="stat-label">AI Model</span>
         </div>
         <div className="stat-item">
@@ -719,10 +731,10 @@ function App() {
         <div className="control-group">
           <label>Modeller</label>
           <div className="model-checkboxes">
-            {MODEL_KEYS.map(code => (
-              <label className="chip" key={code} style={{ '--chip-color': MODELS[code].color }} title={MODELS[code].info}>
+            {ALL_MODEL_KEYS.map(code => (
+              <label className="chip" key={code} style={{ '--chip-color': ALL_MODELS[code].color }} title={ALL_MODELS[code].info}>
                 <input type="checkbox" checked={enabledModels[code]} onChange={() => toggleModel(code)} />
-                {MODELS[code].label}
+                {ALL_MODELS[code].label}
               </label>
             ))}
             <button type="button" className="model-quick-btn" onClick={() => setAllModels(true)}>Tümü</button>
@@ -771,14 +783,6 @@ function App() {
               />
               <span>Meteoroloji tahmini</span>
             </label>
-            <label className="toggle-label" style={{ '--toggle-color': IFS.color }} title={IFS.info}>
-              <input
-                type="checkbox"
-                checked={showIFS}
-                onChange={e => setShowIFS(e.target.checked)}
-              />
-              <span>{IFS.label} (fiziksel model)</span>
-            </label>
           </div>
         )}
         {meteoData.length > 0 && (
@@ -793,9 +797,9 @@ function App() {
         )}
       </div>
 
-      {!anyAiAvailable && selectedLat && !loading && (
+      {!anyNoaaModelAvailable && selectedLat && !loading && (
         <div className="info-banner">
-          ℹ️ AI model verisi şu an yalnızca <strong>Türkiye</strong> bölgesi için işleniyor. Bu nokta için yalnızca açık meteoroloji tahmini gösteriliyor.
+          ℹ️ GraphCast/FourCastNet/Pangu-Weather/Aurora verisi şu an yalnızca <strong>Türkiye</strong> bölgesi için işleniyor{anyAiAvailable ? ', ama ECMWF AIFS dünya genelinde kullanılabiliyor' : '. Bu nokta için yalnızca açık meteoroloji tahmini gösteriliyor'}.
         </div>
       )}
 
@@ -1020,12 +1024,11 @@ function App() {
                     <YAxis tick={{ fontSize: 11, fill: chartTheme.tick }} />
                     <Tooltip contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '8px', fontSize: '0.85rem' }} />
                     <Legend />
-                    {MODEL_KEYS.map(code => enabledModels[code] && aiAvailableByModel[code] && (
-                      <Line key={code} type="monotone" dataKey={`windSpeed${code}`} stroke={MODELS[code].color} name={MODELS[code].label} dot={false} strokeWidth={2} />
+                    {ALL_MODEL_KEYS.map(code => enabledModels[code] && aiAvailableByModel[code] && (
+                      <Line key={code} type="monotone" dataKey={`windSpeed${code}`} stroke={ALL_MODELS[code].color} name={ALL_MODELS[code].label} dot={false} strokeWidth={2} />
                     ))}
                     {ensembleStats && <Line type="monotone" dataKey="ensembleMean" stroke={dark ? '#e5e7eb' : '#111827'} name="Ensemble Ortalama" dot={false} strokeWidth={2.5} strokeDasharray="2 2" />}
                     {showMeteo && <Line type="monotone" dataKey="windSpeedMeteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={anyAiAvailable ? "5 3" : ""} />}
-                    {showIFS && <Line type="monotone" dataKey="windSpeedIFS" stroke={IFS.color} name={IFS.label} dot={false} strokeWidth={2} />}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -1044,18 +1047,19 @@ function App() {
                   <p className="section-note">
                     CV = modeller arası standart sapma / ortalama rüzgar hızı. Düşük CV, modellerin birbirine yakın tahmin verdiğini (daha güvenilir bir sinyal); yüksek CV ise modeller arasında belirsizlik/anlaşmazlık olduğunu gösterir. Üstteki "Ensemble Ortalama" çizgisi bu {availableModelCount} modelin basit ortalamasıdır.
                   </p>
+                  <div className="corr-table-wrap">
                   <table className="corr-table">
                     <thead>
                       <tr>
                         <th></th>
-                        {MODEL_KEYS.map(code => <th key={code}>{MODELS[code].label}</th>)}
+                        {ALL_MODEL_KEYS.map(code => <th key={code}>{ALL_MODELS[code].label}</th>)}
                       </tr>
                     </thead>
                     <tbody>
-                      {MODEL_KEYS.map(a => (
+                      {ALL_MODEL_KEYS.map(a => (
                         <tr key={a}>
-                          <th>{MODELS[a].label}</th>
-                          {MODEL_KEYS.map(b => {
+                          <th>{ALL_MODELS[a].label}</th>
+                          {ALL_MODEL_KEYS.map(b => {
                             const r = correlationMatrix[a]?.[b];
                             const bg = r == null ? 'transparent' : `rgba(16,185,129,${Math.max(0, r) * 0.5})`;
                             return <td key={b} style={{ background: bg }}>{r == null ? '–' : r.toFixed(2)}</td>;
@@ -1064,6 +1068,7 @@ function App() {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                   <p className="section-note">Modellerin rüzgar hızı tahminleri arasındaki Pearson korelasyon katsayısı (1.0 = birebir aynı yönde hareket, 0 = ilişkisiz). Ortak veri noktası olmayan çiftler "–" gösterilir.</p>
                 </div>
               )}
@@ -1090,11 +1095,10 @@ function App() {
                     <YAxis tick={{ fontSize: 11, fill: chartTheme.tick }} />
                     <Tooltip contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '8px', fontSize: '0.85rem' }} />
                     <Legend />
-                    {MODEL_KEYS.map(code => enabledModels[code] && aiAvailableByModel[code] && (
-                      <Line key={code} type="monotone" dataKey={`t2${code}`} stroke={MODELS[code].color} name={MODELS[code].label} dot={false} strokeWidth={2} />
+                    {ALL_MODEL_KEYS.map(code => enabledModels[code] && aiAvailableByModel[code] && (
+                      <Line key={code} type="monotone" dataKey={`t2${code}`} stroke={ALL_MODELS[code].color} name={ALL_MODELS[code].label} dot={false} strokeWidth={2} />
                     ))}
                     {showMeteo && <Line type="monotone" dataKey="t2Meteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={anyAiAvailable ? "5 3" : ""} />}
-                    {showIFS && <Line type="monotone" dataKey="t2IFS" stroke={IFS.color} name={IFS.label} dot={false} strokeWidth={2} />}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -1108,11 +1112,10 @@ function App() {
                     <YAxis domain={[950, 1050]} tick={{ fontSize: 11, fill: chartTheme.tick }} />
                     <Tooltip contentStyle={{ background: chartTheme.tooltipBg, border: `1px solid ${chartTheme.tooltipBorder}`, borderRadius: '8px', fontSize: '0.85rem' }} />
                     <Legend />
-                    {MODEL_KEYS.map(code => enabledModels[code] && aiAvailableByModel[code] && (
-                      <Line key={code} type="monotone" dataKey={`msl${code}`} stroke={MODELS[code].color} name={MODELS[code].label} dot={false} strokeWidth={2} />
+                    {ALL_MODEL_KEYS.map(code => enabledModels[code] && aiAvailableByModel[code] && (
+                      <Line key={code} type="monotone" dataKey={`msl${code}`} stroke={ALL_MODELS[code].color} name={ALL_MODELS[code].label} dot={false} strokeWidth={2} />
                     ))}
                     {showMeteo && <Line type="monotone" dataKey="mslMeteo" stroke="#3b82f6" name="Meteoroloji" dot={false} strokeWidth={2} strokeDasharray={anyAiAvailable ? "5 3" : ""} />}
-                    {showIFS && <Line type="monotone" dataKey="mslIFS" stroke={IFS.color} name={IFS.label} dot={false} strokeWidth={2} />}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -1223,7 +1226,7 @@ function App() {
             <span className="footer-dot">·</span>
             <span>NOAA MLWP Open Data</span>
             <span className="footer-dot">·</span>
-            <span>GraphCast · FourCastNet · Pangu-Weather · Aurora</span>
+            <span>GraphCast · FourCastNet · Pangu-Weather · Aurora · ECMWF AIFS</span>
           </div>
         </div>
       </footer>

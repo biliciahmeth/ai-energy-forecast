@@ -757,11 +757,18 @@ body {
   color: var(--text-muted);
 }
 
+.corr-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 10px 0;
+}
+
 .corr-table {
   width: 100%;
+  min-width: 420px;
   border-collapse: collapse;
   font-size: 0.8rem;
-  margin: 10px 0;
+  margin: 0;
 }
 
 .corr-table th, .corr-table td {
